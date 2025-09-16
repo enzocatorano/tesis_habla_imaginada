@@ -1,0 +1,10 @@
+﻿# Ignorar datos pesados y resultados
+/data/raw/
+/data/processed/
+/results/
+/models/
+/*.pyc
+__pycache__/
+.env
+.vscode/
+*.zip

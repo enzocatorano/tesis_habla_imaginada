@@ -558,4 +558,178 @@ for tipo in range(2): # modalidad y artefactos (usan todos los datos), vocales y
         plt.tight_layout()
         plt.show()
 
+#############################################################################################################################
+#############################################################################################################################
+#############################################################################################################################
+# prueba de actividad por banda y el impacto del bloque espectral
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.signal import butter, lfilter
 
+duracion = 4
+fs = 256
+t = np.linspace(0, duracion, duracion * fs, endpoint=False)
+
+# funciones de filtro
+def butter_bandpass(lowcut, highcut, fs, order=5):
+    nyq = 0.5 * fs
+    low = lowcut / nyq
+    high = highcut / nyq
+    b, a = butter(order, [low, high], btype='band')
+    return b, a
+
+def butter_bandpass_filter(data, lowcut, highcut, fs, order=5):
+    b, a = butter_bandpass(lowcut, highcut, fs, order=order)
+    y = lfilter(b, a, data)
+    return y
+
+# filtro las bandas
+delta = butter_bandpass_filter(np.random.randn(len(t)), 0.5, 4, fs, order=4)
+theta = butter_bandpass_filter(np.random.randn(len(t)), 4, 8, fs, order=6)*0.6
+alpha = butter_bandpass_filter(np.random.randn(len(t)), 8, 12, fs, order=6)*0.6**2
+beta = butter_bandpass_filter(np.random.randn(len(t)), 12, 32, fs, order=6)*0.6**3
+gamma = butter_bandpass_filter(np.random.randn(len(t)), 32, 64, fs, order=6)*0.6**4
+
+bandas = [delta, theta, alpha, beta, gamma]
+
+s = delta + theta + alpha + beta + gamma
+
+# graficar la señal original y cada banda debajo, todo a la izquierda
+# a la derecha cada fft
+fig, ax = plt.subplots(6, 2, figsize=(16, 8))
+ax[0, 0].plot(t, s)
+ax[0, 0].set_title('Señal Original')
+eje_freq = np.fft.fftfreq(len(s), 1/fs)
+ax[0, 1].plot(eje_freq,np.abs(np.fft.fft(s)))
+ax[0, 1].set_title('FFT Señal Original')
+maximo_freq = np.max(np.abs(np.fft.fft(s)))
+ax[0, 1].set_ylim(0, 1.1*maximo_freq)
+#ax[0, 1].set_xlim(0, fs//2)
+for i in range(5):
+    ax[i + 1, 0].plot(t, bandas[i])
+    ax[i + 1, 0].set_title(f'Banda {i + 1}')
+    ax[i + 1, 1].plot(eje_freq, np.abs(np.fft.fft(bandas[i])))
+    ax[i + 1, 1].set_title(f'FFT Banda {i + 1}')
+    ax[i + 1, 1].set_ylim(0, 1.1*maximo_freq)
+    #ax[i + 1, 1].set_xlim(0, fs//2)
+plt.tight_layout()
+plt.show()
+
+# ahora quiero hacer una convolucion del tensor (bandas x tiempo)
+# con un kernel que sea de dimension (bandas x 1)
+# de esta forma (1, 0, 0, 1, 0) es decir que ve activaciones en delta y beta simultaneamente
+kernel = np.array([1, 0, 0, 1, 0])
+
+# convierto la lista de bandas en un array numpy
+bandas_array = np.array(bandas) # (5, 1024)
+
+# realizo la convolucion
+# el resultado es un vector de (n_muestras)
+convolucion = np.dot(kernel, bandas_array)
+
+# graficar la convolucion
+plt.figure(figsize=(17, 6))
+plt.subplot(3,1,1)
+plt.plot(t,delta)
+plt.title('Delta')
+plt.xlabel('Tiempo (s)')
+plt.ylabel('Amplitud')
+plt.subplot(3,1,2)
+plt.plot(t,beta)
+plt.title('Beta')
+plt.xlabel('Tiempo (s)')
+plt.ylabel('Amplitud')
+plt.subplot(3,1,3)
+plt.plot(t, convolucion)
+plt.title('Convolución de Bandas con Kernel [1, 0, 0, 1, 0]')
+plt.xlabel('Tiempo (s)')
+plt.ylabel('Amplitud')
+plt.tight_layout()
+plt.show()
+
+# le quiero aplicar lReLu a convolucion
+convolucion_lrelu = np.maximum(0 * convolucion, convolucion)
+eje_freq = np.fft.fftfreq(len(convolucion), 1/fs)
+
+# grafico la convolucion con y sin lrelu y a la derecha la fft de ambas
+plt.figure(figsize=(16, 6))
+plt.subplot(2,2,1)
+plt.plot(t, convolucion)
+plt.title('Convolución de Bandas con Kernel [1, 0, 0, 1, 0]')
+plt.xlabel('Tiempo (s)')
+plt.ylabel('Amplitud')
+plt.subplot(2,2,2)
+plt.plot(t, convolucion_lrelu)
+plt.title('Convolución de Bandas con Kernel [1, 0, 0, 1, 0] con lReLu')
+plt.xlabel('Tiempo (s)')
+plt.ylabel('Amplitud')
+plt.subplot(2,2,3)
+plt.plot(eje_freq, np.abs(np.fft.fft(convolucion)))
+plt.title('FFT Convolución de Bandas con Kernel [1, 0, 0, 1, 0]')
+plt.xlabel('Frecuencia (Hz)')
+plt.ylabel('Amplitud')
+plt.xlim(-1, fs//2)
+plt.ylim(0, 200)
+# marco lineas verticales en los bordes de banda
+plt.axvline(x=4, color='b', linestyle='--', linewidth=0.8)
+plt.axvline(x=8, color='b', linestyle='--', linewidth=0.8)
+plt.axvline(x=12, color='b', linestyle='--', linewidth=0.8)
+plt.axvline(x=32, color='b', linestyle='--', linewidth=0.8)
+plt.subplot(2,2,4)
+plt.plot(eje_freq, np.abs(np.fft.fft(convolucion_lrelu)))
+plt.title('FFT Convolución de Bandas con Kernel [1, 0, 0, 1, 0] con lReLu')
+plt.xlabel('Frecuencia (Hz)')
+plt.ylabel('Amplitud')
+plt.xlim(-1, fs//2)
+plt.ylim(0, 2*maximo_freq)
+# marco lineas verticales en los bordes de banda
+plt.axvline(x=4, color='b', linestyle='--', linewidth=0.8)
+plt.axvline(x=8, color='b', linestyle='--', linewidth=0.8)
+plt.axvline(x=12, color='b', linestyle='--', linewidth=0.8)
+plt.axvline(x=32, color='b', linestyle='--', linewidth=0.8)
+plt.tight_layout()
+plt.show()
+
+# calculo la potencia de banda normalizada para la señal con y sin lrelu
+def band_power(data, fs, band, window_size=None):
+    """
+    Calcula la potencia de banda de una señal.
+    data: señal de entrada
+    fs: frecuencia de muestreo
+    band: tupla (lowcut, highcut) para la banda de frecuencia
+    window_size: tamaño de la ventana para el cálculo de la potencia (si es None, usa toda la señal)
+    """
+    if window_size is None:
+        window_size = len(data)
+    
+    # Aplicar filtro de banda
+    b, a = butter_bandpass(band[0], band[1], fs, order=4)
+    filtered_data = lfilter(b, a, data)
+    
+    # Calcular potencia
+    power = np.sum(filtered_data**2) / window_size
+    return power
+
+# Bandas de frecuencia para el cálculo de potencia
+bands_to_analyze = {
+    'Delta': (0.5, 4),
+    'Theta': (4, 8),
+    'Alpha': (8, 12),
+    'Beta': (12, 32),
+    'Gamma': (32, 64)
+}
+
+# printeo las potencias de bandas normalizadas de ambas señales
+print("Potencias de banda para la convolución original:")
+total_power_conv = sum(band_power(convolucion, fs, band) for band in bands_to_analyze.values())
+for name, band in bands_to_analyze.items():
+    power = band_power(convolucion, fs, band)
+    normalized_power = power / total_power_conv if total_power_conv > 0 else 0
+    print(f"  {name}: {normalized_power:.4f}")
+
+print("\nPotencias de banda para la convolución con LReLU:")
+total_power_lrelu = sum(band_power(convolucion_lrelu, fs, band) for band in bands_to_analyze.values())
+for name, band in bands_to_analyze.items():
+    power = band_power(convolucion_lrelu, fs, band)
+    normalized_power = power / total_power_lrelu if total_power_lrelu > 0 else 0
+    print(f"  {name}: {normalized_power:.4f}")

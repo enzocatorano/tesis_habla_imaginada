@@ -1,0 +1,50 @@
+{
+  "seed": 46,
+  "timestamp": "2025-09-29T13:23:49.968846Z",
+  "acc_test": 0.24,
+  "report": {
+    "0": {
+      "precision": 0.18181818181818182,
+      "recall": 0.2,
+      "f1-score": 0.19047619047619047,
+      "support": 10.0
+    },
+    "1": {
+      "precision": 0.1875,
+      "recall": 0.3,
+      "f1-score": 0.23076923076923078,
+      "support": 10.0
+    },
+    "2": {
+      "precision": 0.5,
+      "recall": 0.3,
+      "f1-score": 0.375,
+      "support": 10.0
+    },
+    "3": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1-score": 0.0,
+      "support": 10.0
+    },
+    "4": {
+      "precision": 0.2857142857142857,
+      "recall": 0.4,
+      "f1-score": 0.3333333333333333,
+      "support": 10.0
+    },
+    "accuracy": 0.24,
+    "macro avg": {
+      "precision": 0.23100649350649355,
+      "recall": 0.24000000000000005,
+      "f1-score": 0.22591575091575092,
+      "support": 50.0
+    },
+    "weighted avg": {
+      "precision": 0.2310064935064935,
+      "recall": 0.24,
+      "f1-score": 0.22591575091575092,
+      "support": 50.0
+    }
+  }
+}

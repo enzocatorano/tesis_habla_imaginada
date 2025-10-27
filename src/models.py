@@ -111,3 +111,4 @@ class MLP(nn.Module):
         for i, m in enumerate(self.estructura_total):
             s += f"[{i}] {m}\n"
         return s
+

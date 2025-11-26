@@ -96,6 +96,15 @@ class Entrenador:
             loss = self.func_perdida(pred, y)
             loss.backward()
             self.optimizador.step()
+
+            # aplicar max-norm si el modelo tiene ese método
+            if hasattr(self.modelo, "apply_max_norm"):
+                try:
+                    self.modelo.apply_max_norm()
+                except Exception as e:
+                    # no fallar si la implementación del modelo es distinta
+                    print(f"[Entrenador] Warning apply_max_norm fallo: {e}")
+
             bs = x.shape[0]
             perdida_total += float(loss.item()) * bs
             n_samples += bs

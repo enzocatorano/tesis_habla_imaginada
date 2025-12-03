@@ -1,0 +1,25 @@
+name: enzo_entorno
+channels:
+  - pytorch
+  - nvidia
+  - defaults
+dependencies:
+  - python=3.11
+  - numpy
+  - scipy
+  - matplotlib
+  - scikit-learn
+  - pywavelets
+  - pandas
+  - jupyter
+  - pip
+  - asttokens
+  - colorama
+  - joblib
+  - pillow
+  - pyyaml
+  # PyTorch con CUDA
+  - pytorch
+  - torchvision
+  - torchaudio
+  - pytorch-cuda=12.1

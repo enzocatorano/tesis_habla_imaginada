@@ -1034,3 +1034,76 @@ fig.text(0.5, 0.01, text_labels, ha='center', va='bottom', fontsize=12,
          bbox=dict(boxstyle="round,pad=0.3", fc="black", lw=1))
 plt.tight_layout(rect=[0, 0.03, 1, 1]) # Ajustar layout para dejar espacio para el texto
 plt.show()
+
+
+################################################################################
+################################################################################
+################################################################################
+
+import numpy as np
+import matplotlib.pyplot as plt
+# cargo los datos de
+# data/processed/S01_EEG.npz
+ruta_archivo = 'data/processed/S01_EEG.npz'
+# Cargar el archivo .npz
+data = np.load(ruta_archivo)
+eeg_data = data['data']
+x = eeg_data[:, :-3]
+y = eeg_data[:, -3:]
+x.shape, y.shape
+# reshape a (688, 6, 4096)
+x = x.reshape(688, 6, 4096)
+# submuestro x a 128Hz
+from scipy.signal import resample_poly
+x_resampled = np.zeros((x.shape[0], x.shape[1], 128 * 4))
+for i in range(x.shape[0]):
+    for j in range(x.shape[1]):
+        x_resampled[i, j, :] = resample_poly(x[i, j, :], 128, 1024)
+x = x_resampled
+# energia promedio de las señales
+energia = np.mean(x[:, :, :]**2)
+print(energia)
+# energia promedio de las bandas de eeg de las señales
+def band_defs():
+    return {
+        'delta': (0.5, 4.0),
+        'theta': (4.0, 8.0),
+        'alpha': (8.0, 12.0),
+        'beta' : (12.0, 32.0),
+        'gamma': (32.0, 63.5)
+    }
+bands = band_defs()
+band_energies = {}
+for bname, (low, high) in bands.items():
+    band_signal = np.zeros_like(x)
+    for i in range(x.shape[0]):
+        band_signal[i, :, :] = bandpass_sosfiltfilt(x[i, :, :], low, high, 128, order=4, axis=1)
+    band_energies[bname] = np.mean(band_signal**2)
+print("Energía promedio por banda:")
+for bname, energy in band_energies.items():
+    print(f"  {bname}: {energy:.4f}")
+# dB entre el f % de la banda mas debil y la energia total
+f = 3
+dB = 10 * np.log10(f * band_energies['gamma'] / energia)
+print(dB)
+
+# tomo solo los ultimos 1.5 segundos de cada trial
+x_ventaneado = x[:, :, -int(128*1.5):]
+x_ventaneado.shape
+# hago lo mismo
+# energia total promedio
+energia_total_ventaneado = np.mean(x_ventaneado[:, :, :]**2)
+print(energia_total_ventaneado)
+# energia promedio por banda
+band_energies_ventaneado = {}
+for bname, (low, high) in bands.items():
+    band_signal_ventaneado = np.zeros_like(x_ventaneado)
+    for i in range(x_ventaneado.shape[0]):
+        band_signal_ventaneado[i, :, :] = bandpass_sosfiltfilt(x_ventaneado[i, :, :], low, high, 128, order=4, axis=1)
+    band_energies_ventaneado[bname] = np.mean(band_signal_ventaneado**2)
+print("Energía promedio por banda (ventaneado):")
+for bname, energy in band_energies_ventaneado.items():
+    print(f"  {bname}: {energy:.4f}")
+# dB entre el f % de la banda mas debil y la energia total (ventaneado)
+dB_ventaneado = 10 * np.log10(f * band_energies_ventaneado['gamma'] / energia_total_ventaneado)
+print(dB_ventaneado)

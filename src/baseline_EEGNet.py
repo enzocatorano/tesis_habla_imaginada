@@ -1,4 +1,3 @@
-# src/run_full_experiments.py
 """
 Lanzador de experimentos exhaustivo:
  - Itera por sujetos (archivos S##_*.npz en ../data/processed_aug/)
@@ -43,22 +42,24 @@ except Exception:
 # -----------------------------
 # CONFIGURACIÓN (modificar aquí)
 # -----------------------------
-DATA_DIR = Path(__file__).resolve().parents[1] / "data" / "processed_aug"
+DATA_DIR = Path(__file__).resolve().parents[1] / "data" / "preproc_aug_segm_gnperband_fts"
 EXPERIMENTS_ROOT = Path(__file__).resolve().parents[1] / "experiments"
-EXPERIMENT_NAME = "EEGNet_full_baseline"  # se añadirá timestamp para no sobreescribir
-N_SEEDS = 2
-K_FOLDS = 3
+EXPERIMENT_NAME = "EEGNet_full_baseline_prueba_S01"  # se añadirá timestamp para no sobreescribir
+N_SEEDS = 3
+K_FOLDS = 6
 VAL_FRAC = 0.1
 BATCH_SIZE = 64
-EPOCHS = 10
-LR = 1e-3
-PATIENCE = 10
+EPOCHS = 200
+LR = 2e-3
+PATIENCE = 20
 DROPOUT = 0.5
-HIDDEN_UNITS = 1  # None o int
-MAX_SUBJECTS = None   # None para todos, o int para debug (ej. 1)
+HIDDEN_UNITS = 32     # None o int
+MAX_SUBJECTS = 1      # None para todos, o int para debug (ej. 1)
 DEVICE = None         # None => autodetect
 NUM_WORKERS = 0       # dataloader workers (0 en Windows seguro)
 SHUFFLE_TRAIN = True
+SAVE_TRAIN_INDEX = True  # Si True, guarda índices de train/val/test en metadata.json
+SAVE_BEST_MODEL = False   # Si True, guarda el mejor modelo (best_model.pth)
 EXTRA_MODEL_KWARGS = dict(  # parámetros que pasamos a EEGNet por defecto
     F1=8, D=2, kernel_length=64, separable_kernel_length=16,
 )
@@ -85,6 +86,41 @@ def discover_subject_files(data_dir: Path):
 def save_json(path: Path, obj):
     with open(path, "w", encoding="utf8") as fh:
         json.dump(obj, fh, indent=2, default=lambda o: (o.tolist() if isinstance(o, (np.ndarray,)) else str(o)))
+
+def save_experiment_config(exp_root: Path):
+    """Guarda la configuración completa del experimento en un archivo JSON."""
+    config = {
+        "experiment_name": EXPERIMENT_NAME,
+        "data_dir": str(DATA_DIR),
+        "experiments_root": str(EXPERIMENTS_ROOT),
+        "n_seeds": N_SEEDS,
+        "k_folds": K_FOLDS,
+        "val_frac": VAL_FRAC,
+        "batch_size": BATCH_SIZE,
+        "epochs": EPOCHS,
+        "learning_rate": LR,
+        "patience": PATIENCE,
+        "dropout": DROPOUT,
+        "hidden_units": HIDDEN_UNITS,
+        "max_subjects": MAX_SUBJECTS,
+        "device": DEVICE,
+        "num_workers": NUM_WORKERS,
+        "shuffle_train": SHUFFLE_TRAIN,
+        "save_train_index": SAVE_TRAIN_INDEX,
+        "save_best_model": SAVE_BEST_MODEL,
+        "extra_model_kwargs": EXTRA_MODEL_KWARGS,
+        "subsets": {
+            "vocales": {"stim_min": 1, "stim_max": 5, "n_classes": 5},
+            "comandos": {"stim_min": 6, "stim_max": 11, "n_classes": 6}
+        },
+        "timestamp": now_timestamp(),
+        "hostname": platform.node(),
+        "python_version": sys.version,
+        "pytorch_version": torch.__version__,
+        "numpy_version": np.__version__
+    }
+    save_json(exp_root / "experiment_config.json", config)
+    print(f"[Launcher] Saved experiment config to: {exp_root / 'experiment_config.json'}")
 
 # Normalization z-score block (global scalar mean/std computed on X_train)
 def compute_zscore_params(X_train):
@@ -126,6 +162,9 @@ print(f"[Launcher] Using device: {device}")
 # -----------------------------
 EXPERIMENT_ROOT = make_experiment_root(EXPERIMENTS_ROOT, EXPERIMENT_NAME)
 print(f"[Launcher] Experiment root: {EXPERIMENT_ROOT}")
+
+# Save experiment configuration
+save_experiment_config(EXPERIMENT_ROOT)
 
 # -----------------------------
 # Discover subject files
@@ -215,13 +254,6 @@ for subj_idx, subj_path in enumerate(subject_files, start=1):
                     "fold_idx": fold_idx,
                     "k_folds": K_FOLDS,
                     "n_classes": n_classes,
-                    "train_idx_local": train_idx_local.tolist(),
-                    "test_idx_local": test_idx_local.tolist(),
-                    # map to global indices in subject file
-                    "train_idx_global": global_indices[train_idx_local].tolist(),
-                    "test_idx_global": global_indices[test_idx_local].tolist(),
-                    "val_idx_local": None,
-                    "val_idx_global": None,
                     "normalization": {"mean": None, "std": None},
                     "hyperparams": {
                         "batch_size": BATCH_SIZE,
@@ -236,6 +268,15 @@ for subj_idx, subj_path in enumerate(subject_files, start=1):
                     "error": None,
                     "train_time_s": None,
                 }
+
+                # Conditionally add index information
+                if SAVE_TRAIN_INDEX:
+                    metadata["train_idx_local"] = train_idx_local.tolist()
+                    metadata["test_idx_local"] = test_idx_local.tolist()
+                    metadata["train_idx_global"] = global_indices[train_idx_local].tolist()
+                    metadata["test_idx_global"] = global_indices[test_idx_local].tolist()
+                    metadata["val_idx_local"] = None
+                    metadata["val_idx_global"] = None
 
                 try:
                     # build train/val/test arrays
@@ -272,9 +313,10 @@ for subj_idx, subj_path in enumerate(subject_files, start=1):
                         Y_val = Y_train_all[idx_val_rel]
 
                         # compute and store val indices relative to the subset (local indices)
-                        val_idx_local = train_idx_local[idx_val_rel]
-                        metadata["val_idx_local"] = val_idx_local.tolist()
-                        metadata["val_idx_global"] = global_indices[val_idx_local].tolist()
+                        if SAVE_TRAIN_INDEX:
+                            val_idx_local = train_idx_local[idx_val_rel]
+                            metadata["val_idx_local"] = val_idx_local.tolist()
+                            metadata["val_idx_global"] = global_indices[val_idx_local].tolist()
 
                     else:
                         # no validation split requested
@@ -282,8 +324,9 @@ for subj_idx, subj_path in enumerate(subject_files, start=1):
                         Y_train = Y_train_all
                         X_val = np.empty((0, *X_train.shape[1:]))
                         Y_val = np.empty((0,))
-                        metadata["val_idx_local"] = []
-                        metadata["val_idx_global"] = []
+                        if SAVE_TRAIN_INDEX:
+                            metadata["val_idx_local"] = []
+                            metadata["val_idx_global"] = []
 
                     # compute and apply z-score normalization using only X_train
                     mean, std = compute_zscore_params(X_train)
@@ -320,16 +363,20 @@ for subj_idx, subj_path in enumerate(subject_files, start=1):
                     optimizer = optim.Adam(model.parameters(), lr=LR)
                     loss_fn = nn.CrossEntropyLoss()
 
+                    # Determine model output path based on SAVE_BEST_MODEL
+                    model_output_path = str(fold_out / "best_model.pth") if SAVE_BEST_MODEL else None
+
                     # create trainer with log_dir inside fold (trainer will create run_<timestamp>)
                     trainer = Entrenador(modelo=model, optimizador=optimizer, func_perdida=loss_fn,
-                                         device=str(device), parada_temprana=PATIENCE, log_dir=str(fold_out), histogram_freq=0)
+                                         device=str(device), parada_temprana=PATIENCE, log_dir=str(fold_out), 
+                                         histogram_freq=0, save_model=SAVE_BEST_MODEL)
 
                     # train and time
                     t0 = time.time()
                     metrics = trainer.ajustar(cargador_entrenamiento=train_loader,
                                              cargador_validacion=val_loader if len(val_ds) > 0 else None,
                                              epocas=EPOCHS,
-                                             nombre_modelo_salida=str(fold_out / "best_model.pth"),
+                                             nombre_modelo_salida=model_output_path,
                                              early_stop_patience=PATIENCE)
                     t1 = time.time()
                     metadata["train_time_s"] = float(t1 - t0)
@@ -354,7 +401,6 @@ for subj_idx, subj_path in enumerate(subject_files, start=1):
                     np.savez_compressed(fold_out / "test_preds.npz", y_true=y_true_all, y_pred=y_pred_all)
                     np.save(fold_out / "confusion_matrix.npy", cm)
                     save_json(fold_out / "classification_report.json", report_dict)
-                    # trainer may have saved best_model.pth already; if yes, keep it
 
                     # finalize metadata
                     metadata["status"] = "success"

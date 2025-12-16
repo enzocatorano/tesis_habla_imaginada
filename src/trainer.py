@@ -8,6 +8,7 @@ Entrenador:
  - collect epoch-wise arrays (train_losses, val_losses, val_accs)
  - escribe metrics_epochs.json en el run_specific_log_dir
  - devuelve un dict con las listas para que el script de entrenamiento las guarde donde quiera
+ - save_model: controla si se guarda el mejor modelo durante entrenamiento
 
 Evaluador:
  - evaluar, matriz de confusión, reporte y devolver métricas
@@ -38,7 +39,8 @@ class Entrenador:
                  device: str = None,
                  parada_temprana: int = None,
                  log_dir: str = 'runs',
-                 histogram_freq: int = 0):
+                 histogram_freq: int = 0,
+                 save_model: bool = True):
         """
         Args:
             modelo: nn.Module
@@ -48,6 +50,7 @@ class Entrenador:
             parada_temprana: patience en epocas (None para desactivar)
             log_dir: directorio raíz para TensorBoard (cada run tendrá un subdir timestamp)
             histogram_freq: 0 = nunca, >0 = cada N epochs loguea histogramas
+            save_model: si True, guarda el mejor modelo durante entrenamiento; si False, no guarda
         """
         # device handling
         if device is None:
@@ -71,6 +74,7 @@ class Entrenador:
         self.optimizador = optimizador
         self.func_perdida = func_perdida
         self.parada_temprana = parada_temprana
+        self.save_model = save_model
 
         # logging
         self.base_log_dir = Path(log_dir)
@@ -172,6 +176,8 @@ class Entrenador:
               "n_epochs_run": int
             }
         Además guarda metrics_epochs.json dentro de run_specific_log_dir.
+        
+        El modelo solo se guarda si self.save_model es True Y se proporciona nombre_modelo_salida.
         """
         # quick format check with one batch
         x_batch, y_batch = next(iter(cargador_entrenamiento))
@@ -204,9 +210,14 @@ class Entrenador:
                     best_epoch = ep
                     epochs_no_improve = 0
                     best_state = copy.deepcopy(self.modelo.state_dict())
-                    if nombre_modelo_salida:
-                        # guardamos el checkpoint del mejor modelo
-                        torch.save(self.modelo.state_dict(), nombre_modelo_salida)
+                    
+                    # Solo guardar si save_model está activado Y se proporcionó un nombre
+                    if self.save_model and nombre_modelo_salida:
+                        try:
+                            torch.save(self.modelo.state_dict(), nombre_modelo_salida)
+                            print(f"[Entrenador] Modelo guardado en {nombre_modelo_salida}")
+                        except Exception as e:
+                            print(f"[Entrenador] Warning: no se pudo guardar el modelo: {e}")
                 else:
                     epochs_no_improve += 1
 
@@ -237,7 +248,8 @@ class Entrenador:
             "val_accs": [float(x) if x is not None else None for x in val_accs],
             "best_val_loss": float(best_val_loss) if best_val_loss != float('inf') else None,
             "best_epoch": int(best_epoch) if best_epoch >= 0 else None,
-            "n_epochs_run": len(train_losses)
+            "n_epochs_run": len(train_losses),
+            "model_saved": self.save_model and nombre_modelo_salida is not None
         }
 
         # escribir metrics_epochs.json en el run_specific_log_dir

@@ -33,7 +33,7 @@ HOP_SEC = 0.5
 # Band-noise (gaussian noise banda-limitada por Butterworth)
 DO_BAND_NOISE = True
 BUTTER_ORDER = 4
-F_ENERGY = 0.2  # fracción de energía objetivo
+F_ENERGY = 3  # fracción de energía objetivo
 ENERGY_USE_WEAKEST_BAND = True
 PER_CHANNEL_SCALE = True
 

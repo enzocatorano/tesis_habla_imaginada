@@ -1,0 +1,8 @@
+{
+  "experiment_root": "C:\\Users\\SantaFe-Tech\\Desktop\\Enzo_Catorano\\Universidad\\Extracurricular_investigacion\\tesis_cientibeca\\experiments\\S01_EEGNet_noAugtest_20260119-231957_CatoranoBrothers",
+  "n_subjects": 2,
+  "subjects": [
+    "S01_preprocessed",
+    "S02_preprocessed"
+  ]
+}

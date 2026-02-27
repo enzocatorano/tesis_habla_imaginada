@@ -1,0 +1,29 @@
+{
+  "experiment_root": "C:\\Users\\SantaFe-Tech\\Desktop\\Enzo_Catorano\\Universidad\\Extracurricular_investigacion\\tesis_cientibeca\\experiments\\EEGNet_full_baseline_prueba_S01",
+  "n_subjects": 1,
+  "subjects": [
+    "S01_EEG_augmented"
+  ],
+  "per_subject_summaries": {
+    "S01_EEG_augmented": {
+      "vocales": {
+        "n_folds": 18,
+        "precision_mean": 0.33642384919554835,
+        "precision_std": 0.011650456059130138,
+        "recall_mean": 0.3299888348246557,
+        "recall_std": 0.009467695770688192,
+        "f1_mean": 0.3084309396198991,
+        "f1_std": 0.011913750279192802
+      },
+      "comandos": {
+        "n_folds": 18,
+        "precision_mean": 0.2855681430456748,
+        "precision_std": 0.009473118247539797,
+        "recall_mean": 0.2842392746927651,
+        "recall_std": 0.008258009498903292,
+        "f1_mean": 0.27369651532492284,
+        "f1_std": 0.009241825405336156
+      }
+    }
+  }
+}

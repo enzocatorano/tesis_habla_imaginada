@@ -456,12 +456,12 @@ def plot_band_accuracy_boxplots(data_vocales, data_comandos, output_path: Path, 
         chance_level = 1.0 / n_classes
         data_min = np.nanmin(band_arr)
         data_max = np.nanmax(band_arr)
-        y_min = max(0, min(chance_level, data_min * 0.9))
-        y_max = min(1, max(chance_level, data_max * 1.1))
+        y_min = max(0, min(chance_level * 0.9, data_min * 0.9))
+        y_max = min(1, max(chance_level * 0.9, data_max * 1.1))
         ax.set_ylim(y_min, y_max)
         
         # Línea de probabilidad base
-        ax.axhline(y=chance_level, color='gray', linestyle=':', linewidth=2, 
+        ax.axhline(y=chance_level, color='red', linestyle=':', linewidth=2, 
                   label=f'Chance level ({chance_level:.3f})', alpha=0.7)
         
         ax.set_xlabel("Frequency Band", fontsize=10)
@@ -520,12 +520,12 @@ def plot_ftsurrogate_accuracy_boxplots(data_vocales, data_comandos, output_path:
         all_data = without_fts + with_fts
         data_min = np.nanmin(all_data)
         data_max = np.nanmax(all_data)
-        y_min = max(0, min(chance_level, data_min * 0.9))
-        y_max = min(1, max(chance_level, data_max * 1.1))
+        y_min = max(0, min(chance_level * 0.9, data_min * 0.9))
+        y_max = min(1, max(chance_level * 0.9, data_max * 1.1))
         ax.set_ylim(y_min, y_max)
         
         # Línea de probabilidad base
-        ax.axhline(y=chance_level, color='gray', linestyle=':', linewidth=2,
+        ax.axhline(y=chance_level, color='red', linestyle=':', linewidth=2,
                   label=f'Chance level ({chance_level:.3f})', alpha=0.7)
         
         ax.set_ylabel("Accuracy", fontsize=10)
@@ -780,12 +780,12 @@ def plot_global_band_accuracy_boxplots(all_subjects_data_raw: Dict, output_path:
         chance_level = 1.0 / n_classes
         data_min = np.nanmin(band_matrix)
         data_max = np.nanmax(band_matrix)
-        y_min = max(0, min(chance_level, data_min * 0.9))
-        y_max = min(1, max(chance_level, data_max * 1.1))
+        y_min = max(0, min(chance_level * 0.9, data_min * 0.9))
+        y_max = min(1, max(chance_level * 0.9, data_max * 1.1))
         ax.set_ylim(y_min, y_max)
         
         # Línea de probabilidad base
-        ax.axhline(y=chance_level, color='gray', linestyle=':', linewidth=2,
+        ax.axhline(y=chance_level, color='red', linestyle=':', linewidth=2,
                   label=f'Chance level ({chance_level:.3f})', alpha=0.7)
         
         ax.set_xlabel("Frequency Band", fontsize=10)
@@ -853,12 +853,12 @@ def plot_global_ftsurrogate_accuracy_boxplots(all_subjects_data_raw: Dict, outpu
         all_data = without_fts_per_subject + with_fts_per_subject
         data_min = np.nanmin(all_data)
         data_max = np.nanmax(all_data)
-        y_min = max(0, min(chance_level, data_min * 0.9))
-        y_max = min(1, max(chance_level, data_max * 1.1))
+        y_min = max(0, min(chance_level * 0.9, data_min * 0.9))
+        y_max = min(1, max(chance_level * 0.9, data_max * 1.1))
         ax.set_ylim(y_min, y_max)
         
         # Línea de probabilidad base
-        ax.axhline(y=chance_level, color='gray', linestyle=':', linewidth=2,
+        ax.axhline(y=chance_level, color='red', linestyle=':', linewidth=2,
                   label=f'Chance level ({chance_level:.3f})', alpha=0.7)
         
         ax.set_ylabel("Accuracy", fontsize=10)

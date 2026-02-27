@@ -44,17 +44,17 @@ except Exception:
 # -----------------------------
 DATA_DIR = Path(__file__).resolve().parents[1] / "data" / "preproc_aug_segm_gnperband_fts"
 EXPERIMENTS_ROOT = Path(__file__).resolve().parents[1] / "experiments"
-EXPERIMENT_NAME = "EEGNet_full_baseline_prueba_S01"  # se añadirá timestamp para no sobreescribir
-N_SEEDS = 3
+EXPERIMENT_NAME = "EEGNet_full_baseline"  # se añadirá timestamp para no sobreescribir
+N_SEEDS = 4
 K_FOLDS = 6
 VAL_FRAC = 0.1
 BATCH_SIZE = 64
 EPOCHS = 200
-LR = 2e-3
+LR = 3e-3
 PATIENCE = 20
 DROPOUT = 0.5
 HIDDEN_UNITS = 32     # None o int
-MAX_SUBJECTS = 1      # None para todos, o int para debug (ej. 1)
+MAX_SUBJECTS = None   # None para todos, o int para debug (ej. 1)
 DEVICE = None         # None => autodetect
 NUM_WORKERS = 0       # dataloader workers (0 en Windows seguro)
 SHUFFLE_TRAIN = True

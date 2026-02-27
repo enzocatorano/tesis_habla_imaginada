@@ -14,7 +14,7 @@ import json
 # --- Configurable por el usuario (ajustá aquí) ---
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent
-DATA_DIR = str(PROJECT_ROOT / "data" / "processed")
+DATA_DIR = str(PROJECT_ROOT / "data" / "original")
 OUT_DIR = str(PROJECT_ROOT / "data" / "preproc_aug_segm_gnperband_fts")
 
 SUBJECTS = [f"S{str(i).zfill(2)}" for i in range(1, 16)]
@@ -26,7 +26,7 @@ FS_ORIG = 1024
 FS_TARGET = 128
 
 # Segmentación (si DO_SEGMENTATION=False, se usará la señal completa del trial como una única ventana)
-DO_SEGMENTATION = True
+DO_SEGMENTATION = False
 WIN_SEC = 1.5
 HOP_SEC = 0.5
 

@@ -140,8 +140,9 @@ class EEGNet(nn.Module):
       - semilla: int or None.
     """
     def __init__(self,
-                 in_ch,
-                 n_classes,
+                 in_ch: int,
+                 n_classes: int,
+                 T: int = 512,
                  F1: int = 8,
                  D: int = 2,
                  F2: int | None = None,
@@ -149,25 +150,18 @@ class EEGNet(nn.Module):
                  separable_kernel_length: int = 16,
                  pool_time1: int = 4,
                  pool_time2: int = 8,
-                 dropout_prob: float = 0.5,
+                 dropout_prob: float = 0.25,
                  hidden_units: int | None = None,
                  max_norm_spatial: float = 1.0,
                  max_norm_dense: float = 0.25,
                  semilla=None):
         super().__init__()
 
-        # ----------------------------------------------------------
-        # BLOQUE DE REPRODUCIBILIDAD
-        # ----------------------------------------------------------
         if semilla is not None:
             torch.manual_seed(int(semilla))
             torch.cuda.manual_seed_all(int(semilla))
             torch.backends.cudnn.deterministic = True
             torch.backends.cudnn.benchmark = False
-            self.semilla = int(semilla)
-        else:
-            self.semilla = None
-        # ----------------------------------------------------------
 
         if F2 is None:
             F2 = F1 * D
@@ -187,74 +181,51 @@ class EEGNet(nn.Module):
         self.max_norm_dense = max_norm_dense
 
         # ---------------------
-        # Block 1: Temporal conv
+        # Block 1: Temporal + Spatial
         # ---------------------
-        # Input reshaped to (batch, 1, C, T)
-        # Conv2d temporal: in_channels=1, out_channels=F1, kernel_size=(1, kernel_length)
-        self.conv_temporal = nn.Conv2d(in_channels=1,
-                                       out_channels=self.F1,
-                                       kernel_size=(1, self.kernel_length),
-                                       padding=(0, self.kernel_length // 2),
-                                       bias=False)
-        self.bn1 = nn.BatchNorm2d(self.F1)
+        self.conv_temporal = nn.Conv2d(1, self.F1, (1, self.kernel_length),
+                                       padding=(0, self.kernel_length // 2), bias=False)
+        self.bn1 = nn.BatchNorm2d(self.F1, eps=1e-3, momentum=0.1, affine=True)
 
-        # ---------------------
-        # Depthwise spatial conv
-        # ---------------------
-        # Implement depthwise: groups = in_channels (=F1), out_channels = F1 * D
-        # Kernel height spans all channels (in_ch) => kernel_size=(in_ch, 1)
-        self.depthwise_spatial = nn.Conv2d(in_channels=self.F1,
-                                           out_channels=self.F1 * self.D,
-                                           kernel_size=(self.in_ch, 1),
-                                           groups=self.F1,          # depthwise per temporal filter
-                                           bias=False)
-        # BatchNorm after depthwise
-        self.bn_depth = nn.BatchNorm2d(self.F1 * self.D)
-
-        # ---------------------
-        # Pooling + dropout after block 1
-        # ---------------------
-        self.pool1 = nn.AvgPool2d(kernel_size=(1, self.pool_time1))
+        self.depthwise_spatial = nn.Conv2d(self.F1, self.F1 * self.D, (self.in_ch, 1),
+                                           groups=self.F1, bias=False)
+        self.bn_depth = nn.BatchNorm2d(self.F1 * self.D, eps=1e-3, momentum=0.1, affine=True)
+        
+        self.pool1 = nn.AvgPool2d((1, self.pool_time1))
         self.dropout1 = nn.Dropout(p=self.dropout_prob)
         self.elu = nn.ELU()
 
         # ---------------------
-        # Block 2: Separable conv
-        # Depthwise temporal then pointwise 1x1
+        # Block 2: Separable
         # ---------------------
-        # Depthwise temporal conv: groups = in_channels (F1*D), out_channels = same (multiplier=1)
-        self.depthwise_time = nn.Conv2d(in_channels=self.F1 * self.D,
-                                        out_channels=self.F1 * self.D,
-                                        kernel_size=(1, self.separable_kernel_length),
+        self.depthwise_time = nn.Conv2d(self.F1 * self.D, self.F1 * self.D, 
+                                        (1, self.separable_kernel_length),
                                         padding=(0, self.separable_kernel_length // 2),
-                                        groups=self.F1 * self.D,
-                                        bias=False)
-        # pointwise 1x1 conv to mix maps -> F2 output maps
-        self.pointwise = nn.Conv2d(in_channels=self.F1 * self.D,
-                                   out_channels=self.F2,
-                                   kernel_size=(1, 1),
-                                   bias=False)
+                                        groups=self.F1 * self.D, bias=False)
+        self.pointwise = nn.Conv2d(self.F1 * self.D, self.F2, (1, 1), bias=False)
         self.bn2 = nn.BatchNorm2d(self.F2)
-
-        self.pool2 = nn.AvgPool2d(kernel_size=(1, self.pool_time2))
+        
+        self.pool2 = nn.AvgPool2d((1, self.pool_time2))
         self.dropout2 = nn.Dropout(p=self.dropout_prob)
 
         # ---------------------
-        # Classifier
+        # Classifier: Cálculo de dimensión de entrada
         # ---------------------
-        # We don't know the final temporal length until forward (depends on T and pooling),
-        # so we will create the dense layers lazily in forward when flatten size is known.
-        self._dense_initialized = False
+        # T_out tras las dos operaciones de pooling (AvgPool2d)
+        t_out = T // self.pool_time1
+        t_out = t_out // self.pool_time2
+        self.flattened_dim = self.F2 * t_out
 
-        # store layers for later init
-        self.final_fc = None
-        self.hidden_fc = None
+        if self.hidden_units is None:
+            self.final_fc = nn.Linear(self.flattened_dim, self.n_classes)
+            self.hidden_fc = None
+        else:
+            self.hidden_fc = nn.Linear(self.flattened_dim, self.hidden_units)
+            self.final_fc = nn.Linear(self.hidden_units, self.n_classes)
 
-        # initialize weights (common practice)
         self._init_weights()
 
     def _init_weights(self):
-        # Kaiming normal for convs
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
                 nn.init.kaiming_normal_(m.weight, nonlinearity='linear')
@@ -263,113 +234,51 @@ class EEGNet(nn.Module):
                 if m.bias is not None:
                     nn.init.zeros_(m.bias)
 
-    def _create_dense(self, flattened_dim):
-        """Create classifier layers once flattened size is known.
-        Ensure new layers live on the same device as the rest of the model.
-        """
-        if self._dense_initialized:
-            return
-
-        # device where existing parameters live (conv layers already moved por trainer)
-        try:
-            device = next(self.parameters()).device
-        except StopIteration:
-            # fallback to CPU if model has no parameters (shouldn't happen)
-            device = torch.device('cpu')
-
-        if self.hidden_units is None:
-            # single FC -> class logits (moved to device)
-            self.final_fc = nn.Linear(flattened_dim, self.n_classes, bias=True).to(device)
-        else:
-            self.hidden_fc = nn.Linear(flattened_dim, self.hidden_units, bias=True).to(device)
-            self.final_fc = nn.Linear(self.hidden_units, self.n_classes, bias=True).to(device)
-
-        # initialize these weights too (on the right device)
-        if self.final_fc is not None:
-            nn.init.xavier_uniform_(self.final_fc.weight)
-            if self.final_fc.bias is not None:
-                nn.init.zeros_(self.final_fc.bias)
-        if self.hidden_fc is not None:
-            nn.init.xavier_uniform_(self.hidden_fc.weight)
-            if self.hidden_fc.bias is not None:
-                nn.init.zeros_(self.hidden_fc.bias)
-
-        self._dense_initialized = True
-
     def forward(self, x: torch.Tensor):
-        """
-        x: (batch, C, T)
-        returns logits (batch, n_classes)
-        """
-        if x.dim() != 3:
-            raise ValueError("Input tensor must be shape (batch, C, T)")
-
-        # reshape to (batch, 1, C, T)
+        # Input: (batch, C, T) -> Reshape: (batch, 1, C, T)
         x = x.unsqueeze(1)
 
-        # Block1: temporal conv
-        x = self.conv_temporal(x)       # -> (batch, F1, C, T)
+        # Block 1
+        x = self.conv_temporal(x)
         x = self.bn1(x)
-        # Depthwise spatial conv
-        x = self.depthwise_spatial(x)   # -> (batch, F1*D, 1, T)
+        x = self.depthwise_spatial(x)
         x = self.bn_depth(x)
         x = self.elu(x)
-        x = self.pool1(x)               # -> (batch, F1*D, 1, T//pool_time1)
+        x = self.pool1(x)
         x = self.dropout1(x)
 
-        # Block2: separable conv
-        x = self.depthwise_time(x)      # -> (batch, F1*D, 1, T' )
-        x = self.pointwise(x)           # -> (batch, F2, 1, T' )
+        # Block 2
+        x = self.depthwise_time(x)
+        x = self.pointwise(x)
         x = self.bn2(x)
         x = self.elu(x)
-        x = self.pool2(x)               # -> (batch, F2, 1, T'' )
+        x = self.pool2(x)
         x = self.dropout2(x)
 
-        # flatten: remove the singleton spatial dimension (height=1)
-        batch = x.shape[0]
-        _, nch, h, t = x.shape  # h should be 1
-        x = x.reshape(batch, nch * h * t)
+        # Flatten
+        x = x.view(x.size(0), -1)
 
-        # lazy dense creation according to flattened dimension
-        if not self._dense_initialized:
-            self._create_dense(flattened_dim=x.shape[1])
-
-        if self.hidden_units is not None:
+        # Classifier
+        if self.hidden_fc is not None:
             x = self.hidden_fc(x)
             x = F.elu(x)
-
+        
         logits = self.final_fc(x)
         return logits
 
     def apply_max_norm(self):
-        """
-        Apply max-norm constraints to:
-         - spatial depthwise conv filters (self.depthwise_spatial)
-         - final dense layer weights (self.final_fc) if present
-        This function should be called AFTER optimizer.step() each training iteration.
-        """
-        # 1) spatial conv: weights shape -> (out_channels, in_channels_per_group, kernel_h, kernel_w)
-        # For depthwise spatial: out_channels = F1 * D, in_channels_per_group = 1 (because groups=F1)
-        w = self.depthwise_spatial.weight.data  # shape (F1*D, 1, kernel_h, 1)
-        # compute norm over (in_channel, kernel_h, kernel_w) -> per-filter norm
-        # flatten dims 1:]
-        w_flat = w.view(w.shape[0], -1)
-        norms = w_flat.norm(2, dim=1, keepdim=True)
-        desired = torch.clamp(norms, max=self.max_norm_spatial)
-        # avoid division by zero
-        scale = desired / (1e-8 + norms)
-        w_flat = w_flat * scale
-        self.depthwise_spatial.weight.data = w_flat.view_as(w)
+        # Spatial conv max-norm
+        w = self.depthwise_spatial.weight.data
+        norm = w.view(w.size(0), -1).norm(2, dim=1, keepdim=True).view(w.size(0), 1, 1, 1)
+        desired = torch.clamp(norm, max=self.max_norm_spatial)
+        self.depthwise_spatial.weight.data *= (desired / (1e-8 + norm))
 
-        # 2) final dense layer weights: apply row-wise max-norm (incoming weights per neuron)
+        # Final dense max-norm
         if self.final_fc is not None:
-            W = self.final_fc.weight.data  # shape (n_classes, hidden or flattened)
-            W_flat = W.view(W.shape[0], -1)
-            norms = W_flat.norm(2, dim=1, keepdim=True)
-            desired = torch.clamp(norms, max=self.max_norm_dense)
-            scale = desired / (1e-8 + norms)
-            W_flat = W_flat * scale
-            self.final_fc.weight.data = W_flat.view_as(W)
+            w = self.final_fc.weight.data
+            norm = w.norm(2, dim=1, keepdim=True)
+            desired = torch.clamp(norm, max=self.max_norm_dense)
+            self.final_fc.weight.data *= (desired / (1e-8 + norm))
 
     def summary(self, T_example: int):
         """
@@ -382,3 +291,105 @@ class EEGNet(nn.Module):
             s = self.forward(x)
         print(f"Example forward with T={T_example} produced logits shape: {s.shape}")
 
+################################################################################################
+
+class ShallowConvNet(nn.Module):
+    def __init__(
+        self,
+        n_canales: int,
+        n_clases: int,
+        n_samples: int = 512,
+        n_filtros_temporales: int = 40,
+        longitud_kernel_temporal: int = 25,
+        pool_size: int = 75,
+        pool_stride: int = 15,
+        dropout: float = 0.5):
+
+        super().__init__()
+
+        self.temporal_block = nn.Sequential(
+            nn.Conv2d(1, n_filtros_temporales, kernel_size=(1, longitud_kernel_temporal), bias=False),
+            nn.Conv2d(n_filtros_temporales, n_filtros_temporales, kernel_size=(n_canales, 1), bias=False),
+            nn.BatchNorm2d(n_filtros_temporales),
+        )
+        self.pooling_block = nn.Sequential(
+            nn.AvgPool2d(kernel_size=(1, pool_size), stride=(1, pool_stride)),
+            nn.Dropout(dropout)
+        )
+        # Calculamos la dimensión de salida para el clasificador
+        out_dim = self._get_final_flattened_size(n_canales, n_samples)
+        self.clasificador = nn.Linear(out_dim, n_clases)
+
+    def _get_final_flattened_size(self, n_ch, n_s):
+        with torch.no_grad():
+            x = torch.zeros(1, 1, n_ch, n_s)
+            x = self.temporal_block(x)
+            # Simulación de la no linealidad square
+            x = x**2
+            x = self.pooling_block(x)
+            return x.numel()
+
+    def forward(self, x):
+        if x.ndim == 3: x = x.unsqueeze(1) # (B, 1, C, T)
+        x = self.temporal_block(x)
+        x = x**2
+        x = self.pooling_block(x)
+        # Log-activation (estilo FBCSP)
+        x = torch.log(torch.clamp(x, min=1e-6))
+        x = x.view(x.size(0), -1)
+        return self.clasificador(x)
+
+###########################################################################################
+
+class DeepConvNet(nn.Module):
+    def __init__(self,
+                 n_canales: int,
+                 n_clases: int,
+                 n_samples: int = 512,
+                 dropout: float = 0.5):
+        
+        super().__init__()
+
+        # Bloque 1: Temporal + Espacial (Siguiendo a Cooney 2020)
+        self.bloque1 = nn.Sequential(
+            nn.Conv2d(1, 15, kernel_size=(1, 10), bias=False), # Kernel temporal inicial
+            nn.Conv2d(15, 15, kernel_size=(n_canales, 1), bias=False),
+            nn.BatchNorm2d(15),
+            nn.ELU(),
+            nn.MaxPool2d(kernel_size=(1, 2), stride=(1, 2)),
+            nn.Dropout(dropout)
+        )
+        # Bloques Profundos (Cooney usa 3 bloques idénticos)
+        self.bloque2 = self._make_block(15, 30, dropout)
+        self.bloque3 = self._make_block(30, 60, dropout)
+        self.bloque4 = self._make_block(60, 120, dropout)
+
+        out_dim = self._get_final_flattened_size(n_canales, n_samples)
+        self.clasificador = nn.Linear(out_dim, n_clases)
+
+    def _make_block(self, in_f, out_f, drop):
+        return nn.Sequential(
+            nn.Conv2d(in_f, out_f, kernel_size=(1, 10), bias=False),
+            nn.BatchNorm2d(out_f),
+            nn.ELU(),
+            nn.MaxPool2d(kernel_size=(1, 2), stride=(1, 2)),
+            nn.Dropout(drop)
+        )
+
+    def _get_final_flattened_size(self, n_ch, n_s):
+        with torch.no_grad():
+            x = torch.zeros(1, 1, n_ch, n_s)
+            x = self.bloque1(x)
+            x = self.bloque2(x)
+            x = self.bloque3(x)
+            x = self.bloque4(x)
+            return x.numel()
+
+    def forward(self, x):
+        if x.ndim == 3: x = x.unsqueeze(1)
+        x = self.bloque1(x)
+        x = self.bloque2(x)
+        x = self.bloque3(x)
+        x = self.bloque4(x)
+        x = x.view(x.size(0), -1)
+        return self.clasificador(x)

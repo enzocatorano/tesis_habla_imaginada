@@ -1,0 +1,15 @@
+###
+Imagined speech can be decoded from low- and cross-frecuency intracranial EEG features
+https://www.nature.com/articles/s41467-021-27725-3
+better decode theta and beta bands
+idem with cross-frecuency coupling
+small datasets
+###
+Optimizing input layers improves CNN generalization and transfer learning for imagined speech decoding from EEG
+https://scispace.com/pdf/optimizing-layers-improves-cnn-generalization-and-transfer-1slfy2eot3.pdf
+use transfer learning with sinc(i) dataset
+downsampling 128hz + ica + standarization inter-subject + cnn
+train to classify imagined vowels before and after fine-tuning, with all the data, supervised learning
+###
+
+###

@@ -1,9 +1,12 @@
 # src/models.py
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from collections import OrderedDict
 from typing import List, Optional, Callable
+from sklearn.base import BaseEstimator, ClassifierMixin
+from sklearn.ensemble import GradientBoostingClassifier
 
 ####################################################################################################################################
 
@@ -393,3 +396,87 @@ class DeepConvNet(nn.Module):
         x = self.bloque4(x)
         x = x.view(x.size(0), -1)
         return self.clasificador(x)
+
+############################################################################################################
+
+# Ensamble de árboles de clasificación binaria paralela según Bolaños y Rufiner
+# ---
+# N módulos operan paralelamente para clasificar una señal etiquetada.
+# Cada módulo es un ensamble de árboles tipo LogitBoost entrenado separadamente
+# en una configuración "Uno vs el Resto" (One-vs-All).
+class ESMB_BR():
+    def __init__(self, n_classes=5, learning_cycles=11, learning_rate=0.12, max_depth=3, semilla=42):
+        """
+        Inicializa el ensamble de clasificadores paralelos.
+        
+        Parámetros por defecto basados en el paper:
+        - n_classes: 5 (para las vocales /a/, /e/, /i/, /o/, /u/)
+        - learning_cycles: 11 ciclos de aprendizaje
+        - learning_rate: 0.12
+        """
+        self.n_classes = n_classes
+        self.learning_cycles = learning_cycles
+        self.learning_rate = learning_rate
+        self.max_depth = max_depth
+        self.random_state = semilla
+        
+        # Lista que contendrá los N clasificadores binarios independientes
+        self.modules = []
+        
+        for i in range(self.n_classes):
+            # Se instancia el modelo usando pérdida logística ('log_loss') 
+            # para emular el método LogitBoost especificado por los autores.
+            model = GradientBoostingClassifier(
+                loss='log_loss', 
+                n_estimators=self.learning_cycles,
+                learning_rate=self.learning_rate,
+                max_depth=self.max_depth,
+                random_state=self.random_state + i # Semillas distintas para cada módulo
+            )
+            self.modules.append(model)
+
+    def fit(self, X, y):
+        """
+        Entrena los N clasificadores binarios de forma independiente.
+        
+        X: array-like de forma (n_muestras, n_caracteristicas)
+        y: array-like de forma (n_muestras,) con etiquetas enteras (0 a n_classes-1)
+        """
+        # Se asegura de que y sea un array de numpy para facilitar el enmascarado
+        y = np.array(y)
+        
+        for c in range(self.n_classes):
+            # Crea un vector objetivo binario para la clase 'c': 
+            # 1 si pertenece a la clase 'c', 0 en caso contrario
+            y_binary = (y == c).astype(int)
+            
+            # Entrena el módulo correspondiente con este vector binario
+            self.modules[c].fit(X, y_binary)
+            
+        return self
+
+    def predict(self, X):
+        """
+        Realiza la predicción aplicando la estricta lógica combinadora "uno de cinco".
+        Retorna la clase predicha, o -1 si el caso es descartado por ambigüedad.
+        """
+        n_samples = X.shape[0]
+        # Matriz para almacenar las predicciones binarias de cada módulo (n_muestras, n_clases)
+        predictions = np.zeros((n_samples, self.n_classes))
+        
+        # Recolectar las predicciones (0 o 1) de cada clasificador individual [cite: 258, 259]
+        for c in range(self.n_classes):
+            predictions[:, c] = self.modules[c].predict(X)
+            
+        final_predictions = np.full(n_samples, -1) # -1 representa una clase inválida/descartada
+        
+        # Contar cuántos clasificadores se activaron (dieron 1) por cada muestra
+        activation_counts = np.sum(predictions, axis=1)
+        
+        # Lógica de "uno de cinco": solo es válido si exactamente un clasificador se activa [cite: 260, 328, 329]
+        valid_mask = (activation_counts == 1)
+        
+        # Para las muestras válidas, asignamos el índice del clasificador que se activó
+        final_predictions[valid_mask] = np.argmax(predictions[valid_mask], axis=1)
+                
+        return final_predictions

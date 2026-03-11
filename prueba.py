@@ -1009,13 +1009,16 @@ plt.tight_layout()
 plt.show()
 
 # pruebo lo mismo pero cargando de los datos augmentados creados
-ruta = 'data\processed_aug\S01_EEG_augmented.npz'
+ruta = 'data\preproc_aug_segm_gnperband_fts\S01_EEG_augmented.npz'
 data = np.load(ruta)
 x = data['data']
 y = data['labels']
+i = 0
+tiempo_segmentado = np.linspace(0, x.shape[2] / 128, x.shape[2])
+eje_freq_segmentado = np.fft.fftfreq(len(x[i, ch, :]), 1/fs)
 # tomo uno al azar y lo grafico junto a su fft y un cuadro de texto con las etiquetas
 #i = np.random.randint(0, x.shape[0])
-i = 5
+plt.style.use('dark_background')
 fig, ax = plt.subplots(6, 2, figsize=(10, 8))
 for ch in range(6):
     ax[ch, 0].plot(tiempo_segmentado, x[i, ch, :])
@@ -1029,81 +1032,455 @@ for ch in range(6):
     ax[ch, 1].set_ylim(0.8*np.min(np.abs(np.fft.fft(x[i, ch, :]))), 1.2 * np.max(np.abs(np.fft.fft(x[i, ch, :]))))
     ax[ch, 1].set_yscale('log')
 # Añadir cuadro de texto con las etiquetas
-text_labels = (f"Modalidad: {int(y[i, 0])} - Estímulo: {int(y[i, 1])} - Artefacto: {int(y[i, 2])} - Banda: {int(y[i, 3])}")
+text_labels = (f"Modalidad: {int(y[i, 0])} - Estímulo: {int(y[i, 1])} - Artefacto: {int(y[i, 2])} - Banda: {int(y[i, 3])} - FTS: {int(y[i, 4])}")
 fig.text(0.5, 0.01, text_labels, ha='center', va='bottom', fontsize=12,
          bbox=dict(boxstyle="round,pad=0.3", fc="black", lw=1))
 plt.tight_layout(rect=[0, 0.03, 1, 1]) # Ajustar layout para dejar espacio para el texto
 plt.show()
 
+# quiero ver las primeras etiquetas
+for i in range(120):
+    print(y[i])
 
-################################################################################
-################################################################################
-################################################################################
-
+############################################################################################################
+############################################################################################################
+############################################################################################################
+# quiero ver todas las carpetas de datos que tengo
+import os
 import numpy as np
-import matplotlib.pyplot as plt
-# cargo los datos de
-# data/processed/S01_EEG.npz
-ruta_archivo = 'data/processed/S01_EEG.npz'
-# Cargar el archivo .npz
-data = np.load(ruta_archivo)
-eeg_data = data['data']
-x = eeg_data[:, :-3]
-y = eeg_data[:, -3:]
-x.shape, y.shape
-# reshape a (688, 6, 4096)
-x = x.reshape(688, 6, 4096)
-# submuestro x a 128Hz
-from scipy.signal import resample_poly
-x_resampled = np.zeros((x.shape[0], x.shape[1], 128 * 4))
-for i in range(x.shape[0]):
-    for j in range(x.shape[1]):
-        x_resampled[i, j, :] = resample_poly(x[i, j, :], 128, 1024)
-x = x_resampled
-# energia promedio de las señales
-energia = np.mean(x[:, :, :]**2)
-print(energia)
-# energia promedio de las bandas de eeg de las señales
-def band_defs():
-    return {
-        'delta': (0.5, 4.0),
-        'theta': (4.0, 8.0),
-        'alpha': (8.0, 12.0),
-        'beta' : (12.0, 32.0),
-        'gamma': (32.0, 63.5)
-    }
-bands = band_defs()
-band_energies = {}
-for bname, (low, high) in bands.items():
-    band_signal = np.zeros_like(x)
-    for i in range(x.shape[0]):
-        band_signal[i, :, :] = bandpass_sosfiltfilt(x[i, :, :], low, high, 128, order=4, axis=1)
-    band_energies[bname] = np.mean(band_signal**2)
-print("Energía promedio por banda:")
-for bname, energy in band_energies.items():
-    print(f"  {bname}: {energy:.4f}")
-# dB entre el f % de la banda mas debil y la energia total
-f = 3
-dB = 10 * np.log10(f * band_energies['gamma'] / energia)
-print(dB)
 
-# tomo solo los ultimos 1.5 segundos de cada trial
-x_ventaneado = x[:, :, -int(128*1.5):]
-x_ventaneado.shape
-# hago lo mismo
-# energia total promedio
-energia_total_ventaneado = np.mean(x_ventaneado[:, :, :]**2)
-print(energia_total_ventaneado)
-# energia promedio por banda
-band_energies_ventaneado = {}
-for bname, (low, high) in bands.items():
-    band_signal_ventaneado = np.zeros_like(x_ventaneado)
-    for i in range(x_ventaneado.shape[0]):
-        band_signal_ventaneado[i, :, :] = bandpass_sosfiltfilt(x_ventaneado[i, :, :], low, high, 128, order=4, axis=1)
-    band_energies_ventaneado[bname] = np.mean(band_signal_ventaneado**2)
-print("Energía promedio por banda (ventaneado):")
-for bname, energy in band_energies_ventaneado.items():
-    print(f"  {bname}: {energy:.4f}")
-# dB entre el f % de la banda mas debil y la energia total (ventaneado)
-dB_ventaneado = 10 * np.log10(f * band_energies_ventaneado['gamma'] / energia_total_ventaneado)
-print(dB_ventaneado)
+rutas = ['data\preproc',
+         'data\preproc_aug_segm_gnperband_fts',
+         'data\processed']
+
+# veo los datos
+for ruta in rutas:
+    print(f"Archivos en {ruta}:")
+    for root, dirs, files in os.walk(ruta):
+        for file in files:
+            if file.endswith('.npz'):
+                file_path = os.path.join(root, file)
+                try:
+                    with np.load(file_path) as data:
+                        keys = list(data.keys())
+                        print(f"  {file}: {keys}")
+                except Exception as e:
+                    print(f"  Error al cargar {file}: {e}")
+        
+# cargo el sujeto 1 de cada ruta
+s01_preproc = np.load('data/preproc/S01_EEG_augmented.npz')
+s01_preproc_aug_segm_gnperband_fts = np.load('data/preproc_aug_segm_gnperband_fts/S01_EEG_augmented.npz')
+s01_processed = np.load('data/processed/S01_EEG.npz')
+
+print("\nContenido de S01_preproc.npz:")
+for key in s01_preproc.keys():
+    print(f"  {key}: {s01_preproc[key].shape}")
+
+print("\nContenido de S01_preproc_aug_segm_gnperband_fts.npz:")
+for key in s01_preproc_aug_segm_gnperband_fts.keys():
+    print(f"  {key}: {s01_preproc_aug_segm_gnperband_fts[key].shape}")
+
+print("\nContenido de S01_processed.npz:")
+for key in s01_processed.keys():
+    print(f"  {key}: {s01_processed[key].shape}")
+
+############################################################################################################
+############################################################################################################
+############################################################################################################
+# preprocesamiento segun Cooney
+
+import os
+import numpy as np
+from glob import glob
+import matplotlib.pyplot as plt
+from scipy import signal
+from sklearn.decomposition import FastICA
+from math import gcd
+
+# Parámetros (ajustables)
+ORIG_SFREQ = 1024.0
+FINAL_SFREQ = 128.0
+TRIAL_SECONDS = 4.0
+N_CHANNELS = 6
+SAMPLES_PER_TRIAL = int(ORIG_SFREQ * TRIAL_SECONDS)  # 4096
+FLAT_EEG_LEN = SAMPLES_PER_TRIAL * N_CHANNELS  # 24576
+LABELS_PER_TRIAL = 3
+FLAT_ROW_LEN = FLAT_EEG_LEN + LABELS_PER_TRIAL  # 24579
+CHANNEL_NAMES = ["F3","F4","C3","C4","P3","P4"]
+ICA_DOWNSAMPLE_FACTOR = 3  # replicando el paper
+ICA_CORR_THRESHOLD = 0.8
+
+plt.rcParams['figure.figsize'] = (10,4)
+
+########################################################################
+def find_main_array_in_npz(npz_path):
+    with np.load(npz_path, allow_pickle=True) as z:
+        keys = list(z.keys())
+        if len(keys) == 0:
+            raise ValueError("npz vacío")
+        sizes = {k: np.size(z[k]) for k in keys}
+        main_key = max(sizes, key=sizes.get)
+        return z[main_key]
+
+def reshape_flat_trials(flat_matrix):
+    arr = np.asarray(flat_matrix)
+    if arr.ndim == 1:
+        L = arr.size
+        if L % FLAT_ROW_LEN != 0:
+            raise ValueError(f"Longitud {L} no divisible por {FLAT_ROW_LEN}.")
+        n_trials = L // FLAT_ROW_LEN
+        arr = arr.reshape(n_trials, FLAT_ROW_LEN)
+    if arr.ndim == 2:
+        n_trials, rowlen = arr.shape
+        if rowlen == FLAT_ROW_LEN:
+            eeg_part = arr[:, :FLAT_EEG_LEN]
+            labels = arr[:, FLAT_EEG_LEN:FLAT_ROW_LEN]
+        elif rowlen == FLAT_EEG_LEN:
+            eeg_part = arr
+            labels = None
+        else:
+            raise ValueError(f"fila len {rowlen} inesperada")
+        eeg = eeg_part.reshape(n_trials, N_CHANNELS, SAMPLES_PER_TRIAL)
+        eeg = np.transpose(eeg, (0, 2, 1))  # -> (n_trials, samples, channels)
+        return eeg, labels
+    raise ValueError("Formato no soportado")
+
+def design_fir_bandpass(low, high, fs, numtaps=801):
+    return signal.firwin(numtaps, [low, high], pass_zero=False, fs=fs)
+
+def apply_fir_forward_backward(data_1d, fir):
+    return signal.filtfilt(fir, 1.0, data_1d)
+
+def filter_trials(eeg_trials, low, high, sfreq, numtaps=801):
+    fir = design_fir_bandpass(low, high, sfreq, numtaps=numtaps)
+    n_trials, n_samples, n_ch = eeg_trials.shape
+    out = np.zeros_like(eeg_trials)
+    for tr in range(n_trials):
+        for ch in range(n_ch):
+            out[tr, :, ch] = apply_fir_forward_backward(eeg_trials[tr, :, ch], fir)
+    return out
+
+def resample_trials(eeg_trials, orig_fs, new_fs):
+    # resample_poly con factores reducidos
+    up_fact = int(new_fs * 1000)
+    down_fact = int(orig_fs * 1000)
+    g = gcd(up_fact, down_fact)
+    up_fact //= g
+    down_fact //= g
+    n_trials, n_samples, n_ch = eeg_trials.shape
+    new_n = int(np.round(n_samples * new_fs / orig_fs))
+    out = np.zeros((n_trials, new_n, n_ch), dtype=np.float32)
+    for tr in range(n_trials):
+        for ch in range(n_ch):
+            out[tr, :, ch] = signal.resample_poly(eeg_trials[tr, :, ch], up_fact, down_fact)
+    return out
+
+def concat_trials_for_ica(eeg_trials):
+    # devuelve array (n_samples_total, n_ch)
+    n_trials, n_samples, n_ch = eeg_trials.shape
+    concat = eeg_trials.reshape(n_trials * n_samples, n_ch)
+    return concat
+
+########################################################################
+# Ruta al archivo real (ajustá)
+ruta_referencia = r".\data\original\S01_EEG.npz"  # cambia por tu ruta local (u "data/original/S01_EEG.npz")
+ruta_objetivo = r'.\data\original\S02_EEG.npz'
+# referencia
+arr_referencia = find_main_array_in_npz(ruta_referencia)
+eeg_referencia, labels_referencia = reshape_flat_trials(arr_referencia)
+# objetivo
+arr_objetivo = find_main_array_in_npz(ruta_objetivo)
+eeg_objetivo, labels_objetivo = reshape_flat_trials(arr_objetivo)
+
+print("Forma EEG:", eeg_referencia.shape, eeg_objetivo.shape)  # (n_trials, samples, channels)
+
+########################################################################
+eeg_filt_referencia = filter_trials(eeg_referencia, 2.0, 40.0, ORIG_SFREQ, numtaps=801)
+print("Filtrado OK — forma:", eeg_filt_referencia.shape)
+eeg_filt_objetivo = filter_trials(eeg_objetivo, 2.0, 40.0, ORIG_SFREQ, numtaps=801)
+print("Filtrado OK — forma:", eeg_filt_objetivo.shape)
+# visualizá un trozo de un trial para comparar antes/despues (primer canal)
+trial_idx = 1
+ch = 0
+plt.subplot(2,2,1)
+plt.plot(eeg_objetivo[trial_idx, :2000, ch])
+plt.title("Raw (canal {}) trial {}".format(ch,trial_idx))
+# fft
+freq_orig, Pxx_orig = signal.welch(eeg_objetivo[trial_idx, :, ch], fs=ORIG_SFREQ, nperseg=SAMPLES_PER_TRIAL)
+plt.subplot(2,2,2)
+plt.semilogy(freq_orig, Pxx_orig)
+plt.title("PSD Raw")
+plt.xlim([0,60])
+freq_filt, Pxx_filt = signal.welch(eeg_filt_objetivo[trial_idx, :, ch], fs=ORIG_SFREQ, nperseg=SAMPLES_PER_TRIAL)
+plt.subplot(2,2,3)
+plt.plot(eeg_filt_objetivo[trial_idx, :2000, ch])
+plt.title("Filtered 2-40 Hz")
+plt.subplot(2,2,4)
+plt.semilogy(freq_filt, Pxx_filt)
+plt.title("PSD Filtered 2-40 Hz")
+plt.xlim([0,60])
+plt.tight_layout()
+plt.show()
+
+########################################################################
+concat_referencia = concat_trials_for_ica(eeg_filt_referencia)  # (n_trials*n_samples, n_ch)
+ica_ds_referencia = signal.resample_poly(concat_referencia, up=1, down=ICA_DOWNSAMPLE_FACTOR, axis=0)
+ica_fs_referencia = ORIG_SFREQ / ICA_DOWNSAMPLE_FACTOR
+print("Concat:", concat_referencia.shape, " -> downsampled:", ica_ds_referencia.shape, "fs ICA=", ica_fs_referencia)
+
+concat_objetivo = concat_trials_for_ica(eeg_filt_objetivo)  # (n_trials*n_samples, n_ch)
+ica_ds_objetivo = signal.resample_poly(concat_objetivo, up=1, down=ICA_DOWNSAMPLE_FACTOR, axis=0)
+ica_fs_objetivo = ORIG_SFREQ / ICA_DOWNSAMPLE_FACTOR
+print('Concat:', concat_objetivo.shape, '-> downsampled:', ica_ds_objetivo.shape, 'fs ICA=', ica_fs_objetivo)
+
+ica_referencia = FastICA(n_components=N_CHANNELS, random_state=17, max_iter=2000)
+S_referencia_ = ica_referencia.fit_transform(ica_ds_referencia)  # shape (n_samples_ds, n_components)
+mixing_referencia_ = ica_referencia.mixing_  # shape (n_ch, n_comp)
+print("ICA OK. mixing shape:", mixing_referencia_.shape)
+ica_objetivo = FastICA(n_components=N_CHANNELS, random_state=17, max_iter=2000)
+S_objetivo_ = ica_objetivo.fit_transform(ica_ds_objetivo)
+mixing_objetivo_ = ica_objetivo.mixing_
+print("ICA OK. mixing shape:", mixing_objetivo_.shape)
+
+# topographies (n_components, n_ch)
+topos_referencia = mixing_referencia_.T.copy()
+topos_objetivo = mixing_objetivo_.T.copy()
+
+# normalizar por norma L2 para visualización comparativa
+topos_norm_referencia = topos_referencia / (np.linalg.norm(topos_referencia, axis=1, keepdims=True) + 1e-12)
+topos_norm_objetivo = topos_objetivo / (np.linalg.norm(topos_objetivo, axis=1, keepdims=True) + 1e-12)
+
+########################################################################
+# Identificación de componente de parpadeo en el sujeto de referencia (S01)
+frontal_idx = [0, 1]  # F3, F4 en CHANNEL_NAMES
+frontal_power_referencia = np.sum(np.abs(topos_referencia[:, frontal_idx]), axis=1)
+template_idx_referencia = int(np.argmax(frontal_power_referencia))
+template_topo_referencia = topos_norm_referencia[template_idx_referencia]
+
+print(f"S01: Componente plantilla seleccionada (blink): {template_idx_referencia}")
+plt.figure(figsize=(6, 4))
+plt.bar(range(N_CHANNELS), template_topo_referencia)
+plt.xticks(range(N_CHANNELS), CHANNEL_NAMES, rotation=45)
+plt.title("S01 - Plantilla (topografía normalizada) - posible blink")
+plt.tight_layout()
+plt.show()
+
+########################################################################
+# Correlacionar la plantilla de S01 con las topografías de S02
+corrs_objetivo = np.array([np.corrcoef(template_topo_referencia, topos_norm_objetivo[i])[0, 1] for i in range(N_CHANNELS)])
+
+print(f"Correlaciones de las componentes de S02 con la plantilla de S01 (blink):")
+for i, c in enumerate(corrs_objetivo):
+    print(f"  Comp {i}: corr = {c:.3f}")
+blink_candidates_objetivo = np.where(np.abs(corrs_objetivo) >= ICA_CORR_THRESHOLD)[0].tolist()
+print("S02: Candidatas (|corr| >= {:.2f}):".format(ICA_CORR_THRESHOLD), blink_candidates_objetivo)
+
+# quiero graficar en una figura con 2 columnas
+# en la izquierda necesito graficar una fraccion de las series temporales de cada componente
+# en la derecha quiero las barras de cada componente
+# quiero que las series temporales usen en 75% del ancho de la figura
+posicion = 1000
+extension = 5000
+fig, axs = plt.subplots(N_CHANNELS+2, 2, figsize=(16, 9), gridspec_kw={'width_ratios': [5, 1]})
+for i in range(N_CHANNELS):
+    # Columna izquierda: Series temporales de las componentes
+    axs[i, 0].plot(S_objetivo_[posicion:extension, i])  # Mostrar una porción de la serie temporal
+    axs[i, 0].set_title(f'Componente {i} - Serie Temporal')
+    axs[i, 0].set_ylabel('Amplitud')
+    axs[i, 0].set_xticks([])
+    # Columna derecha: Topografía de la componente (barras)
+    axs[i, 1].bar(range(N_CHANNELS), topos_norm_objetivo[i])
+    axs[i, 1].set_title(f'Componente {i} - Topografía')
+    axs[i, 1].set_xticks(range(N_CHANNELS), CHANNEL_NAMES, rotation=45)
+    axs[i, 1].set_ylim(-1, 1) # Normalizado
+    axs[i, 1].set_xticks([])
+    # Resaltar componentes candidatas a blink
+    if i in blink_candidates_objetivo:
+        axs[i, 0].patch.set_facecolor('red')
+        axs[i, 0].patch.set_alpha(0.2)
+        axs[i, 1].patch.set_facecolor('red')
+        axs[i, 1].patch.set_alpha(0.2)
+# fila N+1 a la izquierda pongo la serie temporal de plantilla
+axs[N_CHANNELS, 0].plot(S_referencia_[posicion:extension, 2])
+axs[N_CHANNELS, 0].set_title('S01 - Plantilla (topografía normalizada) - posible blink')
+axs[N_CHANNELS, 0].set_ylabel('Amplitud')
+axs[N_CHANNELS, 1].bar(range(N_CHANNELS), template_topo_referencia)
+axs[N_CHANNELS, 1].set_title('S01 - Plantilla (topografía normalizada) - posible blink')
+axs[N_CHANNELS, 1].set_xticks(range(N_CHANNELS), CHANNEL_NAMES, rotation=45)
+axs[N_CHANNELS, 1].set_ylim(-1, 1)
+# fila N+2 a la izquierda ponga la serie temporal original concatenada submuestreada
+# suma de canales F3 + F4 dividido 2
+axs[N_CHANNELS + 1, 0].plot(ica_ds_objetivo[posicion:extension, frontal_idx[0]] + ica_ds_objetivo[posicion:extension, frontal_idx[1]])
+axs[N_CHANNELS + 1, 0].set_title('S02 - Suma F3+F4 (downsampled)')
+axs[N_CHANNELS + 1, 0].set_ylabel('Amplitud')
+axs[N_CHANNELS + 1, 0].set_xlabel('Muestras')
+plt.tight_layout()
+plt.show()
+
+########################################################################
+# Remoción de componentes en S02
+S_ds_clean_objetivo = S_objetivo_.copy()
+S_ds_clean_objetivo[:, blink_candidates_objetivo] = 0.0
+recon_ds_objetivo = S_ds_clean_objetivo @ mixing_objetivo_.T  # (n_samples_ds, n_ch)
+
+# volver a fs original por upsampling
+recon_objetivo = signal.resample_poly(recon_ds_objetivo, up=ICA_DOWNSAMPLE_FACTOR, down=1, axis=0)  # (n_samples_orig, n_ch)
+
+# reconstrucción completa (toda la señal concatenada) -> pasar a trials
+n_trials_objetivo = eeg_filt_objetivo.shape[0]
+recon_trials_objetivo = recon_objetivo[:FLAT_EEG_LEN].reshape(n_trials_objetivo, SAMPLES_PER_TRIAL, N_CHANNELS)
+
+# comparar en trial ejemplo
+tr = 1
+ch = 0
+t = np.arange(SAMPLES_PER_TRIAL)/ORIG_SFREQ
+plt.figure(figsize=(12,6))
+plt.subplot(2,1,1)
+plt.plot(t[:2000], eeg_filt_objetivo[tr,:2000,ch], label="original (filtrado)")
+plt.plot(t[:2000], recon_trials_objetivo[tr,:2000,ch], label="recon sin comps candidatas", alpha=0.8)
+plt.legend(); plt.title(f"Trial {tr} Canal {CHANNEL_NAMES[ch]} — muestra parcial")
+plt.subplot(2,1,2)
+# PSD comparison (Welch)
+f_orig, Pxx_orig = signal.welch(eeg_filt_objetivo[tr,:,ch], fs=ORIG_SFREQ, nperseg=4096)
+f_rec, Pxx_rec = signal.welch(recon_trials_objetivo[tr,:,ch], fs=ORIG_SFREQ, nperseg=4096)
+plt.semilogy(f_orig, Pxx_orig, label='original')
+plt.semilogy(f_rec, Pxx_rec, label='recon sin comps')
+plt.xlim([0,60]); plt.legend(); plt.title("PSD (Welch) comparativa")
+plt.tight_layout()
+plt.show()
+
+########################################################################################################
+
+# prueba del modelo ESMB_BR
+import numpy as np
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score
+from sklearn.base import BaseEstimator, ClassifierMixin
+from sklearn.ensemble import GradientBoostingClassifier
+
+class ESMB_BR():
+    def __init__(self, n_classes=5, learning_cycles=11, learning_rate=0.12, max_depth=3, semilla=42):
+        """
+        Inicializa el ensamble de clasificadores paralelos.
+        
+        Parámetros por defecto basados en el paper:
+        - n_classes: 5 (para las vocales /a/, /e/, /i/, /o/, /u/)
+        - learning_cycles: 11 ciclos de aprendizaje
+        - learning_rate: 0.12
+        """
+        self.n_classes = n_classes
+        self.learning_cycles = learning_cycles
+        self.learning_rate = learning_rate
+        self.max_depth = max_depth
+        self.random_state = semilla
+        
+        # Lista que contendrá los N clasificadores binarios independientes
+        self.modules = []
+        
+        for i in range(self.n_classes):
+            # Se instancia el modelo usando pérdida logística ('log_loss') 
+            # para emular el método LogitBoost especificado por los autores.
+            model = GradientBoostingClassifier(
+                loss='log_loss', 
+                n_estimators=self.learning_cycles,
+                learning_rate=self.learning_rate,
+                max_depth=self.max_depth,
+                random_state=self.random_state + i # Semillas distintas para cada módulo
+            )
+            self.modules.append(model)
+
+    def fit(self, X, y):
+        """
+        Entrena los N clasificadores binarios de forma independiente.
+        
+        X: array-like de forma (n_muestras, n_caracteristicas)
+        y: array-like de forma (n_muestras,) con etiquetas enteras (0 a n_classes-1)
+        """
+        # Se asegura de que y sea un array de numpy para facilitar el enmascarado
+        y = np.array(y)
+        
+        for c in range(self.n_classes):
+            # Crea un vector objetivo binario para la clase 'c': 
+            # 1 si pertenece a la clase 'c', 0 en caso contrario
+            y_binary = (y == c).astype(int)
+            
+            # Entrena el módulo correspondiente con este vector binario
+            self.modules[c].fit(X, y_binary)
+            
+        return self
+
+    def predict(self, X):
+        """
+        Realiza la predicción aplicando la estricta lógica combinadora "uno de cinco".
+        Retorna la clase predicha, o -1 si el caso es descartado por ambigüedad.
+        """
+        n_samples = X.shape[0]
+        # Matriz para almacenar las predicciones binarias de cada módulo (n_muestras, n_clases)
+        predictions = np.zeros((n_samples, self.n_classes))
+        
+        # Recolectar las predicciones (0 o 1) de cada clasificador individual [cite: 258, 259]
+        for c in range(self.n_classes):
+            predictions[:, c] = self.modules[c].predict(X)
+            
+        final_predictions = np.full(n_samples, -1) # -1 representa una clase inválida/descartada
+        
+        # Contar cuántos clasificadores se activaron (dieron 1) por cada muestra
+        activation_counts = np.sum(predictions, axis=1)
+        
+        # Lógica de "uno de cinco": solo es válido si exactamente un clasificador se activa [cite: 260, 328, 329]
+        valid_mask = (activation_counts == 1)
+        
+        # Para las muestras válidas, asignamos el índice del clasificador que se activó
+        final_predictions[valid_mask] = np.argmax(predictions[valid_mask], axis=1)
+                
+        return final_predictions
+
+
+# Aseguramos que la clase ESMB_BR esté definida aquí arriba...
+
+# 1. Generamos datos simulados (imitando la salida de wcm_preprocessing_dwt.py)
+# Supongamos 200 trials, 36 features (6 canales x 6 modos WCM), y 5 clases (vocales)
+np.random.seed(42)
+X_wcm = np.random.rand(200, 36) 
+y_etiquetas = np.random.randint(0, 5, 200)
+
+# 2. Partición clásica en Train y Test
+X_train, X_test, y_train, y_test = train_test_split(
+    X_wcm, y_etiquetas, test_size=0.2, random_state=10
+)
+
+# 3. Instanciamos el modelo con los parámetros de Bolaños y Rufiner
+modelo_br = ESMB_BR(
+    n_classes=5, 
+    learning_cycles=11, 
+    learning_rate=0.12, 
+    max_depth=3
+)
+
+# 4. Entrenamiento
+print("Entrenando los 5 módulos paralelos...")
+modelo_br.fit(X_train, y_train)
+
+# 5. Inferencia / Predicción
+print("Realizando predicciones...")
+predicciones = modelo_br.predict(X_test)
+
+# 6. Evaluación de la lógica estricta "uno de cinco"
+print("\n--- Resultados de la Inferencia ---")
+print(f"Etiquetas reales: {y_test[:15]}...")
+print(f"Predicciones:     {predicciones[:15]}... (-1 significa descartado)")
+
+# Calculamos estadísticas de los descartes
+total_test = len(y_test)
+descartados = np.sum(predicciones == -1)
+validos_mask = predicciones != -1
+
+print(f"\nTotal de ensayos en test: {total_test}")
+print(f"Ensayos descartados por ambigüedad: {descartados} ({(descartados/total_test)*100:.1f}%)")
+
+# Calculamos la precisión (Accuracy) SÓLO sobre los ensayos válidos
+if np.sum(validos_mask) > 0:
+    acc_valida = accuracy_score(y_test[validos_mask], predicciones[validos_mask])
+    print(f"Precisión sobre ensayos válidos: {acc_valida*100:.2f}%")
+else:
+    print("Todos los ensayos fueron descartados por el modelo.")

@@ -1,9 +1,0 @@
-{
-  "experiment_root": "C:\\Users\\SantaFe-Tech\\Desktop\\Enzo_Catorano\\Universidad\\Extracurricular_investigacion\\tesis_cientibeca\\experiments\\EEGNet_S01_baseline_onlineAug_Cooney-like",
-  "n_subjects": 3,
-  "subjects": [
-    "S01_EEG",
-    "S02_EEG",
-    "S03_EEG"
-  ]
-}

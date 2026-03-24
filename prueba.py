@@ -1484,3 +1484,86 @@ if np.sum(validos_mask) > 0:
     print(f"Precisión sobre ensayos válidos: {acc_valida*100:.2f}%")
 else:
     print("Todos los ensayos fueron descartados por el modelo.")
+
+#################################################################
+
+import numpy as np
+import matplotlib.pyplot as plt
+
+# Parámetros
+fs = 1000
+T = 1
+t = np.linspace(0, T, fs*T, endpoint=False)
+
+# Generar señal y ventana gaussiana
+signal = np.cos(2 * np.pi * 25 * t) + np.cos(2 * np.pi * 10 * t)
+N = 3
+sigma = np.linspace(1, N, N)
+sigma = 0.01*2**sigma
+# Generamos la gaussiana centrada para evitar desplazamientos de fase en la FFT
+gauss_t = np.linspace(-0.5*T, 0.5*T, fs*T)
+gaussian = np.exp(-0.5 * (gauss_t / sigma[:, None])**2)
+freq = 15
+armonico = np.sin(2 * np.pi * freq * t)
+kernel = gaussian * armonico
+
+# Aplicar los kernels
+convolved = np.zeros((N, fs*T))
+for i in range(N):
+    convolved[i, :] = np.convolve(signal, kernel[i, :], mode='same')
+
+# Graficar la señal convolucionada
+plt.figure(figsize=(12, 8))
+# señal original
+plt.subplot(3, 2, 1)
+plt.plot(t, signal)
+plt.title('Señal Original')
+plt.xlabel('Tiempo (s)')
+plt.ylabel('Amplitud')
+plt.subplot(3, 2, 5)
+for i in range(N):
+    plt.plot(t, convolved[i, :])
+plt.title('Señal Convolucionada')
+plt.xlabel('Tiempo (s)')
+plt.ylabel('Amplitud')
+# kernels en el tiempo
+plt.subplot(3, 2, 3)
+for i in range(N):
+    plt.plot(t, kernel[i, :])
+plt.title('Kernel Temporal (Gaussiana + Armónico)')
+plt.xlabel('Tiempo (s)')
+plt.ylabel('Amplitud')
+# fft de los kernels
+plt.subplot(3, 2, 4)
+for i in range(N):
+    fft = np.fft.fft(kernel[i, :], fs*T)
+    freqs = np.fft.fftfreq(fs*T, 1/fs)
+    plt.plot(freqs[freqs>0], np.log10(np.abs(fft[freqs>0])))
+plt.title('Espectro del Kernel')
+plt.xlabel('Frecuencia (Hz)')
+plt.ylabel('Amplitud')
+plt.xlim(0, freq*2)
+# fft de la original
+plt.subplot(3, 2, 2)
+freqs = np.linspace(0, fs/2, fs*T)
+fft_signal = np.zeros(fs*T)
+fft_signal[(np.round(freqs, 2)==25.0)] = 1.0
+fft_signal[(np.round(freqs, 2)==10.0)] = 1.0
+plt.plot(freqs, fft_signal)
+plt.title('Espectro de la Señal Original')
+plt.xlabel('Frecuencia (Hz)')
+plt.ylabel('Amplitud')
+plt.xlim(0, freq*2)
+# fft de las convoluciones
+plt.subplot(3, 2, 6)
+for i in range(N):
+    fft = np.fft.fft(kernel[i, :], fs*T)[freqs>=0] * fft_signal
+    plt.plot(freqs[freqs>0], np.abs(fft[freqs>0]))
+plt.title('Espectro de la Señal Convolucionada')
+plt.xlabel('Frecuencia (Hz)')
+plt.ylabel('Amplitud')
+plt.xlim(0, freq*2)
+plt.yscale('log')
+plt.ylim(1e-8, 1e8)
+plt.tight_layout()
+plt.show()

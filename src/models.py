@@ -408,7 +408,6 @@ class ESMB_BR():
     def __init__(self, n_classes=5, learning_cycles=11, learning_rate=0.12, max_depth=3, semilla=42):
         """
         Inicializa el ensamble de clasificadores paralelos.
-        
         Parámetros por defecto basados en el paper:
         - n_classes: 5 (para las vocales /a/, /e/, /i/, /o/, /u/)
         - learning_cycles: 11 ciclos de aprendizaje
@@ -438,7 +437,6 @@ class ESMB_BR():
     def fit(self, X, y):
         """
         Entrena los N clasificadores binarios de forma independiente.
-        
         X: array-like de forma (n_muestras, n_caracteristicas)
         y: array-like de forma (n_muestras,) con etiquetas enteras (0 a n_classes-1)
         """

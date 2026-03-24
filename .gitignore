@@ -1,12 +1,14 @@
 ﻿# Ignorar datos pesados y resultados
-/data/raw/
-/data/processed/
+/data/
 /results/
 /models/
+/docs/
 /*.pyc
 __pycache__/
 .env
 .vscode/
 *.zip
 /features/
-
+/imagenes/
+/colaborations/
+/experiments/

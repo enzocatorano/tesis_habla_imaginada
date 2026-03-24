@@ -1,0 +1,8 @@
+============================================================
+Fecha: 2026-03-24 08:45
+============================================================
+optimizado script de Bolaños y Rufiner
+implementado con wavelets (en algunos casos sobremuestreadas), skip si output existe
+las pruebas hechas con clasificacion binaria y multiclase (al menos para el sujeto 1) con el preprocesamiento tal cual estaba hecho en los script de MATLAB dispuestos por Bolanos no han sido capaces de replicar los resultados ni de obtener algo optimo
+hoy fue el primer dia en que empezamos a trabajar con un agente de ia en el proyecto (OpenCode)
+============================================================

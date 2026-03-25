@@ -3,6 +3,50 @@ Fecha: 2026-03-24 08:45
 ============================================================
 optimizado script de Bolaños y Rufiner
 implementado con wavelets (en algunos casos sobremuestreadas), skip si output existe
+las pruebas feitas con clasificacion binaria y multiclase (al menos para el sujeto 1) con el preprocesamiento tal cual estaba hecho en los script de MATLAB dispuestos por Bolanos no han sido capaces de replicar los resultados ni de obtener algo optimo
+hoy fue el primer dia en que empezamos a trabajar con un agente de ia en el proyecto (OpenCode)
+============================================================
+
+============================================================
+Fecha: 2026-03-25
+============================================================
+TRABAJO REALIZADO:
+
+1. Exploración del repositorio GitHub externo LTU-Machine-Learning/Rethinking-Methods-Inner-Speech:
+   - Repositorio del paper sobre decodificación de habla interna (inner speech)
+   - Dataset SINC (mismo que usamos nosotros) - Universidad Nacional del Litoral (Argentina)
+   - 15 sujetos, 6 canales EEG, 128 Hz (downsampled desde 1024 Hz)
+   - Tareas: vocales (5 clases) y palabras/comandos (6 clases)
+
+2. Análisis comparativo de arquitecturas CNN:
+   - iSpeech-CNN (LTU): ~760K parámetros (6 capas conv, separable temporal/espacial)
+   - EEGNet: ~7K parámetros (compacta, con sesgo inductivo para EEG)
+   - ShallowConvNet: ~18K parámetros (basada en FBCSP)
+   - DeepConvNet: ~120K parámetros (4 bloques profundos)
+   - Las arquitecturas anteriores (EEGNet, Shallow, Deep) no superaron la probabilidad base
+
+3. Implementación de iSpeech-CNN en src/models.py:
+   - Nueva clase iSpeechCNN basada en la arquitectura del repositorio LTU
+   - 6 capas convolucionales con separación temporal/espacial explícita
+   - Parámetros por defecto: F1=20 (vocales), dropout=0.0002
+   - Arquitectura: Conv1a[1×5] temporal → Conv1b[6×1] espacial → ... → FC
+   - Total ~711K parámetros para 5 clases
+
+4. Modificación de src/experimento_CNNs.py:
+   - Agregado import de iSpeechCNN
+   - Agregado bloque de selección de modelo para iSpeechCNN
+   -LISTO para pruebas con el nuevo modelo
+
+5. Preparación de prueba preliminar:
+   - Configuración para ejecutar con 1 sujeto, sin augmentación
+   - Solo datos submuestreados (128 Hz), sin segmentado de ventana
+   - Hiperparámetros del paper original: LR=0.001, epochs=60, patience=30
+
+OBJETIVO: Probar si el modelo más grande (iSpeech-CNN) puede resolver el problema
+de clasificación de habla imaginada que las redes más pequeñas no lograron resolver.
+============================================================
+optimizado script de Bolaños y Rufiner
+implementado con wavelets (en algunos casos sobremuestreadas), skip si output existe
 las pruebas hechas con clasificacion binaria y multiclase (al menos para el sujeto 1) con el preprocesamiento tal cual estaba hecho en los script de MATLAB dispuestos por Bolanos no han sido capaces de replicar los resultados ni de obtener algo optimo
 hoy fue el primer dia en que empezamos a trabajar con un agente de ia en el proyecto (OpenCode)
 ============================================================

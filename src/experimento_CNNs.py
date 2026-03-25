@@ -36,10 +36,10 @@ from tqdm import tqdm
 # Import Entrenador, Evaluador, modelos y Augmentar (en trainer.py y models.py)
 try:
     from trainer import Entrenador, Evaluador, Augmentar
-    from models import EEGNet, ShallowConvNet, DeepConvNet
+    from models import EEGNet, ShallowConvNet, DeepConvNet, iSpeechCNN
 except Exception:
     try:
-        from models import EEGNet, ShallowConvNet, DeepConvNet
+        from models import EEGNet, ShallowConvNet, DeepConvNet, iSpeechCNN
         from trainer import Entrenador, Evaluador, Augmentar
     except Exception as e:
         raise ImportError("No pude importar Entrenador/Evaluador/Augmentar y/o modelos. "
@@ -52,33 +52,33 @@ import inspect
 # -----------------------------
 DATA_DIR = Path(__file__).resolve().parents[1] / "data" / "preprocessed"
 EXPERIMENTS_ROOT = Path(__file__).resolve().parents[1] / "experiments"
-EXPERIMENT_NAME = "S01_EEGNet_noAugtest"
+EXPERIMENT_NAME = "S01_iSpeechCNN_piloto"
 SUFIJO_DATOS = '_preprocessed'
 # Nombre de los arrays dentro del .npz
 NOMBRE_ARRAY_DATOS, NOMBRE_ARRAY_ETIQUETAS = "x", "y"
 N_CHANNELS = 6
 
 # experiment control
-MASTER_SEED = 17    # setea a None si no querés seed maestro
+MASTER_SEED = None    # setea a None si no querés seed maestro
 DETERMINISTIC = False  # True => intenta operaciones deterministas en PyTorch (puede afectar performance)
 
-N_SEEDS = 5
-K_FOLDS = 6
+N_SEEDS = 1
+K_FOLDS = 5
 VAL_FRAC = 0.1
 
 # training hyperparams
 BATCH_SIZE = 64
-EPOCHS = 200
-LR = 1e-3
-PATIENCE = 10
-DROPOUT = 0.5
+EPOCHS = 100
+LR = 1e-5
+PATIENCE = 50
+DROPOUT = 0.01
 HIDDEN_UNITS = None
 
 # SUBJECT selection: None => todos; o lista de enteros p.ej. [1,2,3] o [9,2,15,14]
 # Ejemplos:
 # SUBJECT = None
 # SUBJECT = [1, 2, 3]
-SUBJECT = [1, 2]
+SUBJECT = [1]
 
 DEVICE = None         # None => autodetect
 NUM_WORKERS = 0
@@ -89,8 +89,8 @@ SAVE_BEST_MODEL = False
 # -----------------------------
 # MODEL selection block (editá aquí)
 # -----------------------------
-# Nombre del modelo que querés usar. Opciones: "EEGNet", "ShallowConvNet", "DeepConvNet"
-MODEL_NAME = "EEGNet"
+# Nombre del modelo que querés usar. Opciones: "EEGNet", "ShallowConvNet", "DeepConvNet", "iSpeechCNN"
+MODEL_NAME = "iSpeechCNN"
 
 # Por cada modelo, detallá aquí los parámetros editables. Si un parámetro no coincide con la firma del constructor
 # en models.py será ignorado por la función de construcción (se chequea la firma).
@@ -123,8 +123,15 @@ elif MODEL_NAME == "DeepConvNet":
     MODEL_KWARGS = dict(
             dropout=DROPOUT             # probabilidad de dropout (valores por defecto)
             )
+elif MODEL_NAME == "iSpeechCNN":
+    MODEL_CLASS = iSpeechCNN
+    MODEL_KWARGS = dict(
+            F1=40,              # Filtros base (20 for vowels, 40 for words - user can adjust based on classes)
+            dropout_iSpeech=DROPOUT,  # Dropout específico para iSpeechCNN
+            # n_channels, n_classes, n_timepoints are passed automatically by construir_modelo
+            )
 else:
-    raise ValueError(f"MODEL_NAME desconocido: {MODEL_NAME}. Debe ser 'EEGNet', 'ShallowConvNet' o 'DeepConvNet'.")
+    raise ValueError(f"MODEL_NAME desconocido: {MODEL_NAME}. Debe ser 'EEGNet', 'ShallowConvNet', 'DeepConvNet' o 'iSpeechCNN'.")
 
 # -----------------------------
 # OPTIMIZER (Adam) parametros editables
@@ -134,22 +141,22 @@ OPTIMIZER_KWARGS = dict(
     lr=LR,
     betas=(0.9, 0.999),
     eps=1e-8,
-    weight_decay=1e-5,
+    weight_decay=1e-3,
     amsgrad=False
 )
 
 # -----------------------------
 # Augmentation defaults (puedes modificarlos)
 # -----------------------------
-AUGMENT_KWARGS = dict(window_duration=2.0,
-                      window_shift=1.0,
+AUGMENT_KWARGS = dict(window_duration=4.0,
+                      window_shift=4.0,
                       fs=128,
-                      band_noise_factor_train=1/3,
+                      band_noise_factor_train=0/3,
                       band_noise_factor_eval=0.0,
-                      fts_factor_train=1/3,
+                      fts_factor_train=0/3,
                       fts_factor_eval=0.0,
                       n_fts_versions=1,
-                      noise_magnitude_relative=0.025,
+                      noise_magnitude_relative=0.0,
                       save_metadata=True,
                       save_indices=SAVE_TRAIN_INDEX)
 

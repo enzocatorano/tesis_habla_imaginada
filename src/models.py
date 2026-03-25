@@ -350,7 +350,7 @@ class DeepConvNet(nn.Module):
                  n_clases: int,
                  n_samples: int = 512,
                  dropout: float = 0.5):
-        
+         
         super().__init__()
 
         # Bloque 1: Temporal + Espacial (Siguiendo a Cooney 2020)
@@ -396,6 +396,164 @@ class DeepConvNet(nn.Module):
         x = self.bloque4(x)
         x = x.view(x.size(0), -1)
         return self.clasificador(x)
+
+
+############################################################################################################
+
+class iSpeechCNN(nn.Module):
+    """
+    iSpeechCNN from LTU-Machine-Learning/Rethinking-Methods-Inner-Speech repo.
+    Architecture: 6 convolutional layers with explicit temporal/spatial separation.
+    Input: (batch, n_channels, n_timepoints)
+    Output: logits for n_classes
+    
+    Based on the architecture described in their training scripts:
+    - Layer 1: Temporal conv [1×5] → F1 filters
+    - Layer 2: Spatial conv [n_channels×1] → F1 filters
+    - Layer 3: Temporal conv [1×5] → 2×F1 filters
+    - Layer 4: Temporal conv [1×3] → 5×F1 filters
+    - Layer 5: Temporal conv [1×3] → (25×F1)//2 filters
+    - Layer 6: Temporal conv [1×3] → 25×F1 filters
+    - After Layers 1: BN → LeakyReLU → Dropout
+    - After Layers 2-6: BN → LeakyReLU → AvgPool[1×2] → Dropout
+    - Flatten → FC → Softmax
+    
+    Args:
+        n_channels: number of EEG channels (C)
+        n_classes: number of output classes (e.g. 5 or 6)
+        n_timepoints: number of time samples (T)
+        F1: base number of filters (default 20 for vowels, 40 for words)
+        dropout_iSpeech: dropout probability (default 0.0002)
+        semilla: random seed
+    """
+    def __init__(self,
+                 n_channels: int,
+                 n_classes: int,
+                 n_timepoints: int = 512,
+                 F1: int = 20,
+                 dropout_iSpeech: float = 0.0002,
+                 semilla=None):
+        super().__init__()
+        
+        if semilla is not None:
+            torch.manual_seed(int(semilla))
+            torch.cuda.manual_seed_all(int(semilla))
+            torch.backends.cudnn.deterministic = True
+            torch.backends.cudnn.benchmark = False
+            
+        self.n_channels = n_channels
+        self.n_classes = n_classes
+        self.n_timepoints = n_timepoints
+        self.F1 = F1
+        self.dropout_iSpeech = dropout_iSpeech
+        
+        # Layer 1: Temporal convolution [1×5]
+        self.conv1a = nn.Conv2d(1, self.F1, kernel_size=(1, 5), padding=(0, 2))
+        self.bn1a = nn.BatchNorm2d(self.F1)
+        
+        # Layer 2: Spatial convolution [n_channels×1]
+        self.conv1b = nn.Conv2d(self.F1, self.F1, kernel_size=(self.n_channels, 1), bias=False)
+        self.bn1b = nn.BatchNorm2d(self.F1)
+        
+        # Layer 3: Temporal convolution [1×5]
+        self.conv2 = nn.Conv2d(self.F1, 2*self.F1, kernel_size=(1, 5), padding=(0, 2))
+        self.bn2 = nn.BatchNorm2d(2*self.F1)
+        
+        # Layer 4: Temporal convolution [1×3]
+        self.conv3 = nn.Conv2d(2*self.F1, 5*self.F1, kernel_size=(1, 3), padding=(0, 1))
+        self.bn3 = nn.BatchNorm2d(5*self.F1)
+        
+        # Layer 5: Temporal convolution [1×3]
+        self.conv4 = nn.Conv2d(5*self.F1, (25*self.F1)//2, kernel_size=(1, 3), padding=(0, 1))
+        self.bn4 = nn.BatchNorm2d((25*self.F1)//2)
+        
+        # Layer 6: Temporal convolution [1×3]
+        self.conv5 = nn.Conv2d((25*self.F1)//2, 25*self.F1, kernel_size=(1, 3), padding=(0, 1))
+        self.bn5 = nn.BatchNorm2d(25*self.F1)
+        
+        self.activation = nn.LeakyReLU()
+        self.dropout = nn.Dropout(p=self.dropout_iSpeech)
+        
+        # Calculate flattened size for FC layer
+        # After all layers: (batch, 25*F1, 1, n_timepoints // 2^5)
+        # Because: 5 pooling operations of factor 2 (after layers 2,3,4,5,6)
+        self.pooled_timepoints = self.n_timepoints // (2**5)  # // 32
+        self.flattened_size = 25 * self.F1 * 1 * self.pooled_timepoints
+        
+        self.fc = nn.Linear(self.flattened_size, self.n_classes)
+        
+        self._init_weights()
+        
+    def _init_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, nonlinearity='leaky_relu')
+            elif isinstance(m, nn.Linear):
+                nn.init.xavier_uniform_(m.weight)
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
+    
+    def forward(self, x: torch.Tensor):
+        # Input: (batch, C, T) -> Reshape for Conv2d: (batch, 1, C, T)
+        x = x.unsqueeze(1)
+        
+        # Layer 1: Temporal conv [1×5]
+        x = self.conv1a(x)
+        x = self.bn1a(x)
+        x = self.activation(x)
+        x = self.dropout(x)
+        
+        # Layer 2: Spatial conv [C×1]
+        x = self.conv1b(x)
+        x = self.bn1b(x)
+        x = self.activation(x)
+        x = self.dropout(x)
+        
+        # Layer 2 pooling
+        x = nn.functional.avg_pool2d(x, kernel_size=(1, 2))  # [1×2] pooling
+        
+        # Layer 3: Temporal conv [1×5]
+        x = self.conv2(x)
+        x = self.bn2(x)
+        x = self.activation(x)
+        x = self.dropout(x)
+        
+        # Layer 3 pooling
+        x = nn.functional.avg_pool2d(x, kernel_size=(1, 2))
+        
+        # Layer 4: Temporal conv [1×3]
+        x = self.conv3(x)
+        x = self.bn3(x)
+        x = self.activation(x)
+        x = self.dropout(x)
+        
+        # Layer 4 pooling
+        x = nn.functional.avg_pool2d(x, kernel_size=(1, 2))
+        
+        # Layer 5: Temporal conv [1×3]
+        x = self.conv4(x)
+        x = self.bn4(x)
+        x = self.activation(x)
+        x = self.dropout(x)
+        
+        # Layer 5 pooling
+        x = nn.functional.avg_pool2d(x, kernel_size=(1, 2))
+        
+        # Layer 6: Temporal conv [1×3]
+        x = self.conv5(x)
+        x = self.bn5(x)
+        x = self.activation(x)
+        x = self.dropout(x)
+        
+        # Layer 6 pooling
+        x = nn.functional.avg_pool2d(x, kernel_size=(1, 2))
+        
+        # Flatten
+        x = x.view(x.size(0), -1)
+        
+        # Classifier
+        logits = self.fc(x)
+        return logits
 
 ############################################################################################################
 
@@ -478,3 +636,5 @@ class ESMB_BR():
         final_predictions[valid_mask] = np.argmax(predictions[valid_mask], axis=1)
                 
         return final_predictions
+
+##################################################################

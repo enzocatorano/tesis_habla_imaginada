@@ -1485,85 +1485,226 @@ if np.sum(validos_mask) > 0:
 else:
     print("Todos los ensayos fueron descartados por el modelo.")
 
-#################################################################
+################################################################
 
 import numpy as np
 import matplotlib.pyplot as plt
 
-# Parámetros
-fs = 1000
-T = 1
-t = np.linspace(0, T, fs*T, endpoint=False)
+# cargo los datos de data/preprocessed
+data = np.load('data/preprocessed/S01_preprocessed.npz')
+signal = data['x'][0,0]
+t_signal = np.linspace(0, 4, 4*fs)
+# fft signal
+fs = 128
+n = len(signal)
+freq = np.fft.fftfreq(n, 1/fs)
+fft = np.fft.fft(signal)
+fft = fft[freq > 0]
+freq = freq[freq > 0]
+# wavelet morlet
+media, sigma, f = 0, 0.12, 4
+t_wavelet = np.linspace(-1, 1, 2*fs)
+armonico = np.sin(2*np.pi*f*t_wavelet)
+gaussiana = np.exp(-(t_wavelet-media)**2/(2*sigma**2))
+wavelet = armonico * gaussiana
+wavelet = wavelet/np.sum(wavelet**2)
+# fft wavelet
+fft_wavelet = np.fft.fft(wavelet)
+freq_wavelet = np.fft.fftfreq(len(wavelet), 1/fs)
+fft_wavelet = fft_wavelet[freq_wavelet > 0]
+freq_wavelet = freq_wavelet[freq_wavelet > 0]
+# convolucion
+convolucion = np.convolve(signal, wavelet, mode='same')
+t_conv = np.linspace(0, len(convolucion)/fs, len(convolucion))
+# fft convolucion
+fft_convolucion = np.fft.fft(convolucion)
+freq_conv = np.fft.fftfreq(len(convolucion), 1/fs)
+fft_convolucion = fft_convolucion[freq_conv > 0]
+freq_conv = freq_conv[freq_conv > 0]
 
-# Generar señal y ventana gaussiana
-signal = np.cos(2 * np.pi * 25 * t) + np.cos(2 * np.pi * 10 * t)
-N = 3
-sigma = np.linspace(1, N, N)
-sigma = 0.01*2**sigma
-# Generamos la gaussiana centrada para evitar desplazamientos de fase en la FFT
-gauss_t = np.linspace(-0.5*T, 0.5*T, fs*T)
-gaussian = np.exp(-0.5 * (gauss_t / sigma[:, None])**2)
-freq = 15
-armonico = np.sin(2 * np.pi * freq * t)
-kernel = gaussian * armonico
-
-# Aplicar los kernels
-convolved = np.zeros((N, fs*T))
-for i in range(N):
-    convolved[i, :] = np.convolve(signal, kernel[i, :], mode='same')
-
-# Graficar la señal convolucionada
-plt.figure(figsize=(12, 8))
-# señal original
-plt.subplot(3, 2, 1)
-plt.plot(t, signal)
-plt.title('Señal Original')
+# graficar
+plt.figure(figsize=(12, 9))
+plt.subplot(3,2,1)
+plt.plot(t_signal, signal)
+plt.title('Señal original')
 plt.xlabel('Tiempo (s)')
 plt.ylabel('Amplitud')
-plt.subplot(3, 2, 5)
-for i in range(N):
-    plt.plot(t, convolved[i, :])
-plt.title('Señal Convolucionada')
+plt.ylim(-120, 60)
+plt.subplot(3,2,2)
+plt.plot(freq, np.abs(fft), color = 'orange')
+plt.title('FFT de la señal original')
+plt.xlabel('Frecuencia (Hz)')
+plt.ylabel('Amplitud')
+plt.subplot(3,2,3)
+plt.plot(t_wavelet, wavelet)
+plt.title('Señal wavelet')
 plt.xlabel('Tiempo (s)')
 plt.ylabel('Amplitud')
-# kernels en el tiempo
+plt.subplot(3,2,4)
+plt.plot(freq_wavelet, np.abs(fft_wavelet), color = 'orange')
+plt.title('FFT de la señal wavelet')
+plt.xlabel('Frecuencia (Hz)')
+plt.ylabel('Amplitud')
+plt.subplot(3,2,5)
+plt.plot(t_conv, convolucion)
+plt.title('Convolución')
+plt.xlabel('Tiempo (s)')
+plt.ylabel('Amplitud')
+plt.ylim(-120, 60)
+plt.subplot(3,2,6)
+plt.plot(freq_conv, np.abs(fft_convolucion), color = 'orange')
+plt.title('FFT de la convolución')
+plt.xlabel('Frecuencia (Hz)')
+plt.ylabel('Amplitud')
+plt.tight_layout()
+plt.show()
+
+######################################################
+# dilatacion de filtros
+
+import numpy as np
+import matplotlib.pyplot as plt
+
+fs, f, media, sigma = 32, 4, 0, 0.15
+tiempo = np.linspace(-0.5, 0.5, fs)
+armonico = np.sin(2*np.pi*f*tiempo)
+gaussiana = np.exp(-(tiempo-media)**2/(2*sigma**2))
+wavelet = armonico * gaussiana
+wavelet = wavelet/np.sum(wavelet**2)
+
+# estiro 1 vez rellenando con ceros muestra por medio
+wavelet_1 = np.zeros(len(wavelet)*2)
+wavelet_1[::2] = wavelet
+tiempo_1 = np.linspace(-1, 1, len(wavelet_1))
+# estiro otra vez
+wavelet_2 = np.zeros(len(wavelet)*4)
+wavelet_2[::4] = wavelet
+tiempo_2 = np.linspace(-2, 2, len(wavelet_2))
+
+# fft de las 3
+fft_wavelet = np.fft.fft(wavelet)
+freq_wavelet = np.fft.fftfreq(len(wavelet), 1/fs)
+
+fft_wavelet_1 = np.fft.fft(wavelet_1)
+freq_wavelet_1 = np.fft.fftfreq(len(wavelet_1), 1/fs)
+
+fft_wavelet_2 = np.fft.fft(wavelet_2)
+freq_wavelet_2 = np.fft.fftfreq(len(wavelet_2), 1/fs)
+
+# graficar
+plt.figure(figsize=(14, 6))
+plt.subplot(2,3,1)
+plt.plot(tiempo, wavelet)
+plt.title('Wavelet original')
+plt.subplot(2,3,2)
+plt.plot(tiempo_1, wavelet_1)
+plt.title('Wavelet dilatada x2')
+plt.subplot(2,3,3)
+plt.plot(tiempo_2, wavelet_2)
+plt.title('Wavelet dilatada x4')
+plt.subplot(2,3,4)
+plt.plot(freq_wavelet, np.abs(fft_wavelet), color='orange')
+plt.title('FFT Wavelet original')
+plt.subplot(2,3,5)
+plt.plot(freq_wavelet_1, np.abs(fft_wavelet_1), color='orange')
+plt.title('FFT Wavelet dilatada x2')
+plt.subplot(2,3,6)
+plt.plot(freq_wavelet_2, np.abs(fft_wavelet_2), color='orange')
+plt.title('FFT Wavelet dilatada x4')
+plt.tight_layout()
+plt.show()
+
+###################################################
+
+import numpy as np
+import matplotlib.pyplot as plt
+
+# cargo sujeto 1 de data/preprocesamiento_segun_bolanos_rufiner2
+data1 = np.load('data/preprocesamiento_segun_bolanos_rufiner2/S01_preprocessed.npz')
+x1 = data1['x'][0]
+# idem para data/preprocesamiento_segun_bolanos_rufiner
+data2 = np.load('data/preprocesamiento_segun_bolanos_rufiner/S01_preprocessed.npz')
+x2 = data2['x'][0]
+
+# graficar
+plt.figure(figsize=(12, 6))
+plt.subplot(2,1,1)
+plt.plot(x1)
+plt.title('Preprocesamiento v2')
+plt.subplot(2,1,2)
+plt.plot(x2)
+plt.title('Preprocesamiento v1')
+plt.tight_layout()
+plt.show()
+
+type(data2['y'][0][1])
+type(data2['y'][0][1].astype(int))
+
+##################################################################
+
+import numpy as np
+import matplotlib.pyplot as plt
+
+# cargo un dato de /data/preprocessed
+fs = 128
+data = np.load('data/preprocessed/S01_preprocessed.npz')
+x = data['x'][0][0]
+fft_x = np.fft.fft(x)
+freq_x = np.fft.fftfreq(len(x), 1/fs)
+t = np.linspace(0, 4, 4*fs)
+# wavelet morlet
+f, sigma = 10, np.linspace(0.03, 0.3, 200)
+armonico = np.sin(2*np.pi*f*t)
+wavelet = np.zeros((len(sigma), len(t)))
+fft_wavelet = np.zeros((len(sigma), len(t)))
+for i in range(len(sigma)):
+    gaussiana = np.exp(-(t-2)**2/(2*sigma[i]**2))
+    wavelet[i] = armonico * gaussiana
+    wavelet[i] = wavelet[i]/np.sum(wavelet[i]**2)
+    fft_wavelet[i] = np.fft.fft(wavelet[i])
+freq_wavelet = np.fft.fftfreq(len(t), 1/fs)
+# grafico
+plt.figure(figsize=(14, 8))
+# x y su fft
+plt.subplot(3,2,1)
+plt.plot(t, x)
+plt.title('Señal original')
+plt.xlabel('Tiempo (s)')
+plt.ylabel('Amplitud')
+plt.subplot(3,2,2)
+plt.plot(freq_x, np.abs(fft_x), color='orange')
+plt.title('FFT')
+plt.xlabel('Frecuencia (Hz)')
+plt.ylabel('Amplitud')
+plt.xlim(0, fs/2)
+# grafico las diferentes wavelet con un colormap
+colors = plt.cm.cividis(np.linspace(0.9, 0.1, len(sigma)))
 plt.subplot(3, 2, 3)
-for i in range(N):
-    plt.plot(t, kernel[i, :])
-plt.title('Kernel Temporal (Gaussiana + Armónico)')
+for i in range(len(sigma)):
+    plt.plot(t, wavelet[i], color=colors[i])
+plt.title('Wavelets Morlet (distintos sigma)')
 plt.xlabel('Tiempo (s)')
-plt.ylabel('Amplitud')
-# fft de los kernels
 plt.subplot(3, 2, 4)
-for i in range(N):
-    fft = np.fft.fft(kernel[i, :], fs*T)
-    freqs = np.fft.fftfreq(fs*T, 1/fs)
-    plt.plot(freqs[freqs>0], np.log10(np.abs(fft[freqs>0])))
-plt.title('Espectro del Kernel')
+for i in range(len(sigma)):
+    fft_w = np.fft.fft(wavelet[i])
+    plt.plot(freq_wavelet[:len(t)//2], np.abs(fft_w)[:len(t)//2], color=colors[i])
+plt.title('FFT de las Wavelets')
 plt.xlabel('Frecuencia (Hz)')
-plt.ylabel('Amplitud')
-plt.xlim(0, freq*2)
-# fft de la original
-plt.subplot(3, 2, 2)
-freqs = np.linspace(0, fs/2, fs*T)
-fft_signal = np.zeros(fs*T)
-fft_signal[(np.round(freqs, 2)==25.0)] = 1.0
-fft_signal[(np.round(freqs, 2)==10.0)] = 1.0
-plt.plot(freqs, fft_signal)
-plt.title('Espectro de la Señal Original')
-plt.xlabel('Frecuencia (Hz)')
-plt.ylabel('Amplitud')
-plt.xlim(0, freq*2)
-# fft de las convoluciones
+plt.xlim(0, fs/2)
+# Grafico las convoluciones resultantes
+plt.subplot(3, 2, 5)
+for i in range(len(sigma)):
+    conv = np.convolve(x, wavelet[i], mode='same')
+    plt.plot(t, conv, color=colors[i])
+plt.title('Convoluciones (Señal * Wavelet)')
+plt.xlabel('Tiempo (s)')
 plt.subplot(3, 2, 6)
-for i in range(N):
-    fft = np.fft.fft(kernel[i, :], fs*T)[freqs>=0] * fft_signal
-    plt.plot(freqs[freqs>0], np.abs(fft[freqs>0]))
-plt.title('Espectro de la Señal Convolucionada')
+for i in range(len(sigma)):
+    conv = np.convolve(x, wavelet[i], mode='same')
+    fft_c = np.fft.fft(conv)
+    plt.plot(freq_wavelet[:len(t)//2], np.abs(fft_c)[:len(t)//2], color=colors[i])
+plt.title('FFT de las Convoluciones')
 plt.xlabel('Frecuencia (Hz)')
-plt.ylabel('Amplitud')
-plt.xlim(0, freq*2)
-plt.yscale('log')
-plt.ylim(1e-8, 1e8)
+plt.xlim(0, fs/2)
 plt.tight_layout()
 plt.show()

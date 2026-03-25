@@ -34,7 +34,7 @@ from typing import List, Dict, Tuple
 
 # ---------------- CONFIG ----------------
 EXPERIMENTS_ROOT = Path(__file__).resolve().parents[1] / "experiments"
-EXPERIMENT_NAME_PREFIX = "S01_EEGNet_noAugtest_20260119-231957_CatoranoBrothers"
+EXPERIMENT_NAME_PREFIX = "S01_iSpeechCNN_piloto_20260325-082107_CatoranoBrothers"
 OUTPUT_SUBDIR = "visualization_results"
 
 BAND_LABELS = ["delta", "theta", "alpha", "beta", "gamma"]

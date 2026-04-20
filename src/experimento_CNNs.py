@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-# run_experiments_with_online_augment.py
+# experimento_CNNs.py
 """
-Lanzador de experimentos con augmentación online y control de seed maestro.
+Lanzador de experimentos con augmentación ONLINE VERDADERA y control de seed maestro.
 
 Modificado para:
-- Permitir elegir modelo via MODEL_NAME y definir todos sus parámetros editables en
-  el bloque superior (MODEL_KWARGS para cada modelo).
-- Permitir editar parámetros del optimizador Adam en OPTIMIZER_KWARGS.
-- Reemplazar MAX_SUBJECTS por SUBJECT (None => todos, o lista de ints ej. [1,2,3]).
-- Guardar la configuración del modelo y optimizador en el JSON de configuración.
+- Multiprocesamiento seguro en Windows (if __name__ == '__main__':)
+- Augmentación estocástica "al vuelo" usando OnlineEEGDataset (evita colapso de RAM).
+- Predicción multi-objetivo via TARGET_IDX (Modalidad, Estímulo, Artefacto).
+- Normalización Z-score aislada por canal.
+- Instanciación explícita de modelos (eliminando magia negra).
 """
 
 import os
@@ -18,7 +18,6 @@ import json
 import traceback
 import random
 import re
-import inspect
 from pathlib import Path
 from pprint import pprint
 import platform
@@ -30,37 +29,30 @@ import torch.nn as nn
 import torch.optim as optim
 from sklearn.model_selection import StratifiedKFold, train_test_split
 from sklearn.metrics import confusion_matrix, classification_report, accuracy_score
-from torch.utils.data import TensorDataset, DataLoader
+from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-# Import Entrenador, Evaluador, modelos y Augmentar (en trainer.py y models.py)
-try:
-    from trainer import Entrenador, Evaluador, Augmentar
-    from models import EEGNet, ShallowConvNet, DeepConvNet, iSpeechCNN
-except Exception:
-    try:
-        from models import EEGNet, ShallowConvNet, DeepConvNet, iSpeechCNN
-        from trainer import Entrenador, Evaluador, Augmentar
-    except Exception as e:
-        raise ImportError("No pude importar Entrenador/Evaluador/Augmentar y/o modelos. "
-                          "Asegurate de que trainer.py y models.py estén en el path.") from e
-
-import inspect
+# Imports directos y limpios. Asegúrate de tener dataset.py, trainer.py y models.py en el mismo directorio (o en el PYTHONPATH)
+from dataset import OnlineEEGDataset
+from trainer import Entrenador, Evaluador
+from models import EEGNet, ShallowConvNet, DeepConvNet, iSpeechCNN
 
 # -----------------------------
 # CONFIGURACIÓN (modificar aquí)
 # -----------------------------
-DATA_DIR = Path(__file__).resolve().parents[1] / "data" / "preprocessed"
+DATA_DIR = Path(__file__).resolve().parents[1] / "data" / "synthetic_labels"
 EXPERIMENTS_ROOT = Path(__file__).resolve().parents[1] / "experiments"
-EXPERIMENT_NAME = "S01_iSpeechCNN_piloto"
-SUFIJO_DATOS = '_preprocessed'
-# Nombre de los arrays dentro del .npz
+EXPERIMENT_NAME = "S09_sintetico"
+SUFIJO_DATOS = '_synthetic'
 NOMBRE_ARRAY_DATOS, NOMBRE_ARRAY_ETIQUETAS = "x", "y"
 N_CHANNELS = 6
 
+# TARGET SELECTION (0: Modalidad, 1: Estímulo, 2: Artefacto)
+TARGET_IDX = 1
+
 # experiment control
 MASTER_SEED = None    # setea a None si no querés seed maestro
-DETERMINISTIC = False  # True => intenta operaciones deterministas en PyTorch (puede afectar performance)
+DETERMINISTIC = False # True => intenta operaciones deterministas en PyTorch
 
 N_SEEDS = 1
 K_FOLDS = 5
@@ -69,111 +61,79 @@ VAL_FRAC = 0.1
 # training hyperparams
 BATCH_SIZE = 64
 EPOCHS = 100
-LR = 1e-5
-PATIENCE = 50
-DROPOUT = 0.01
+LR = 1e-4
+PATIENCE = 20
+DROPOUT = 0.1
 HIDDEN_UNITS = None
 
-# SUBJECT selection: None => todos; o lista de enteros p.ej. [1,2,3] o [9,2,15,14]
-# Ejemplos:
-# SUBJECT = None
-# SUBJECT = [1, 2, 3]
-SUBJECT = [1]
+SUBJECT = [9]
 
 DEVICE = None         # None => autodetect
-NUM_WORKERS = 0
+NUM_WORKERS = 0       # IMPORTANTE: Subir a 2, 4 u 8 para que el CPU procese el Online Dataset sin frenar la GPU
 SHUFFLE_TRAIN = True
 SAVE_TRAIN_INDEX = True
 SAVE_BEST_MODEL = False
 
 # -----------------------------
-# MODEL selection block (editá aquí)
+# MODEL selection block
 # -----------------------------
-# Nombre del modelo que querés usar. Opciones: "EEGNet", "ShallowConvNet", "DeepConvNet", "iSpeechCNN"
 MODEL_NAME = "iSpeechCNN"
 
-# Por cada modelo, detallá aquí los parámetros editables. Si un parámetro no coincide con la firma del constructor
-# en models.py será ignorado por la función de construcción (se chequea la firma).
 if MODEL_NAME == "EEGNet":
     MODEL_CLASS = EEGNet
     MODEL_KWARGS = dict(
-            F1=8,                       # nº de filtros temporales (EEGNet-8,2)
-            D=2,                        # depth multiplier (spatial)
-            F2=None,                    # si None -> que la clase calcule F2 = F1 * D
-            kernel_length=64,           # longitud del kernel temporal (L_t)
-            separable_kernel_length=16, # kernel temporal en bloque separable (L_s)
-            pool_time1=4,               # pooling tras primer bloque (factor temporal)
-            pool_time2=8,               # pooling tras separable block (factor temporal)
-            dropout_prob=DROPOUT,       # probabilidad de dropout
-            hidden_units=None,          # int o None (capa densa intermedia)
-            max_norm_spatial=1.0,       # constraint max-norm para filtros espaciales
-            max_norm_dense=0.25         # max-norm para la capa densa final
+            F1=8, D=2, F2=None, kernel_length=64, separable_kernel_length=16,
+            pool_time1=4, pool_time2=8, dropout_prob=DROPOUT, hidden_units=None,
+            max_norm_spatial=1.0, max_norm_dense=0.25
             )
 elif MODEL_NAME == "ShallowConvNet":
     MODEL_CLASS = ShallowConvNet
     MODEL_KWARGS = dict(
-            n_filtros_temporales=40,     # nº de filtros temporales (F)
-            longitud_kernel_temporal=25, # longitud del kernel temporal (samples)
-            pool_size=75,                # tamaño de la ventana de avg pooling (temporal)
-            pool_stride=15,              # stride del pooling temporal
-            dropout=DROPOUT              # probabilidad de dropout
+            n_filtros_temporales=40, longitud_kernel_temporal=25, pool_size=75,
+            pool_stride=15, dropout=DROPOUT
             )
 elif MODEL_NAME == "DeepConvNet":
     MODEL_CLASS = DeepConvNet
-    MODEL_KWARGS = dict(
-            dropout=DROPOUT             # probabilidad de dropout (valores por defecto)
-            )
+    MODEL_KWARGS = dict(dropout=DROPOUT)
 elif MODEL_NAME == "iSpeechCNN":
     MODEL_CLASS = iSpeechCNN
-    MODEL_KWARGS = dict(
-            F1=40,              # Filtros base (20 for vowels, 40 for words - user can adjust based on classes)
-            dropout_iSpeech=DROPOUT,  # Dropout específico para iSpeechCNN
-            # n_channels, n_classes, n_timepoints are passed automatically by construir_modelo
-            )
+    MODEL_KWARGS = dict(F1=20, dropout_iSpeech=DROPOUT)
 else:
-    raise ValueError(f"MODEL_NAME desconocido: {MODEL_NAME}. Debe ser 'EEGNet', 'ShallowConvNet', 'DeepConvNet' o 'iSpeechCNN'.")
+    raise ValueError(f"MODEL_NAME desconocido: {MODEL_NAME}")
 
 # -----------------------------
-# OPTIMIZER (Adam) parametros editables
+# OPTIMIZER (Adam)
 # -----------------------------
-# Se usa Adam siempre, pero podés modificar aquí lr, betas, eps, weight_decay, amsgrad
-OPTIMIZER_KWARGS = dict(
-    lr=LR,
-    betas=(0.9, 0.999),
-    eps=1e-8,
-    weight_decay=1e-3,
-    amsgrad=False
+OPTIMIZER_KWARGS = dict(lr=LR,
+                        betas=(0.9, 0.999),
+                        eps=1e-8,
+                        weight_decay=1e-3,
+                        amsgrad=False)
+
+# -----------------------------
+# Augmentation defaults
+# -----------------------------
+AUGMENT_KWARGS = dict(
+    window_duration=4.0,
+    window_shift=4.0,
+    fs=128,
+    band_noise_factor_train=0.0, # Ajusta tu probabilidad real aquí (ej. 0.3)
+    fts_factor_train=0.0,        # Ajusta tu probabilidad real aquí (ej. 0.3)
+    noise_magnitude_relative=0.025
 )
 
 # -----------------------------
-# Augmentation defaults (puedes modificarlos)
-# -----------------------------
-AUGMENT_KWARGS = dict(window_duration=4.0,
-                      window_shift=4.0,
-                      fs=128,
-                      band_noise_factor_train=0/3,
-                      band_noise_factor_eval=0.0,
-                      fts_factor_train=0/3,
-                      fts_factor_eval=0.0,
-                      n_fts_versions=1,
-                      noise_magnitude_relative=0.0,
-                      save_metadata=True,
-                      save_indices=SAVE_TRAIN_INDEX)
-
-# -----------------------------
-# Helper funcs: seeds, I/O, normalización, construcción de modelo
+# Helper funcs
 # -----------------------------
 def now_timestamp():
     return time.strftime("%Y%m%d-%H%M%S", time.gmtime())
 
 def set_global_seed(seed: int, deterministic: bool = True):
-    """Fija semillas en Python/NumPy/Torch y configura opciones deterministas en PyTorch."""
     os.environ['PYTHONHASHSEED'] = str(seed)
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
-    # determinismo en PyTorch (puede lanzar excepción o degradar performance)
     if deterministic:
         try:
             torch.use_deterministic_algorithms(True)
@@ -200,6 +160,7 @@ def save_json(path: Path, obj):
 def save_experiment_config(exp_root: Path, master_seed, seeds_list):
     config = {
         "experiment_name": EXPERIMENT_NAME,
+        "target_idx": TARGET_IDX,
         "data_dir": str(DATA_DIR),
         "experiments_root": str(EXPERIMENTS_ROOT),
         "n_seeds": N_SEEDS,
@@ -222,91 +183,26 @@ def save_experiment_config(exp_root: Path, master_seed, seeds_list):
         "seeds_list": seeds_list,
         "timestamp": now_timestamp(),
         "hostname": platform.node(),
-        "python_version": sys.version,
-        "pytorch_version": torch.__version__,
-        "numpy_version": np.__version__,
         "model_name": MODEL_NAME,
         "model_kwargs": MODEL_KWARGS,
         "optimizer_kwargs": OPTIMIZER_KWARGS
     }
     save_json(exp_root / "experiment_config.json", config)
-    print(f"[Launcher] Saved experiment config to: {exp_root / 'experiment_config.json'}")
 
 def compute_zscore_params(X_train):
-    flat = X_train.reshape(X_train.shape[0], -1)
-    mean = float(flat.mean())
-    std = float(flat.std())
-    if std < 1e-8:
-        std = 1e-8
+    """Media y std aislada POR CANAL."""
+    mean = np.mean(X_train, axis=(0, 2), keepdims=True)
+    std = np.std(X_train, axis=(0, 2), keepdims=True)
+    std[std < 1e-8] = 1e-8
     return mean, std
 
 def apply_zscore(X, mean, std):
     return (X - mean) / std
 
 def _extract_subject_number_from_filename(path: Path):
-    """
-    Dado un path tipo 'S01_preprocessed.npz', devuelve el entero 1.
-    """
     m = re.match(r"^[sS](\d+)", path.name)
-    if m:
-        return int(m.group(1))
+    if m: return int(m.group(1))
     return None
-
-def construir_modelo(model_class, in_ch, T, n_classes, semilla, dropout, hidden_units, model_kwargs):
-    """
-    Construye una instancia del modelo intentando pasar los argumentos que
-    coincidan con la firma del constructor de la clase.
-
-    - model_class: referencia a la clase (ej. EEGNet)
-    - in_ch: canales de entrada (int)
-    - T: cantidad de samples (int)
-    - n_classes: int
-    - semilla: seed (int)
-    - dropout: valor de dropout (float)
-    - hidden_units: valor (o None)
-    - model_kwargs: diccionario con parámetros editables definidos en el bloque superior
-    """
-    sig = inspect.signature(model_class.__init__)
-    # Map de nombres candidatos a valores
-    candidato_map = {
-        'in_ch': in_ch, 'in_channels': in_ch, 'n_channels': in_ch, 'n_canales': in_ch, 'channels': in_ch,
-        'T': T, 'samples': T, 'n_samples': T, 'length': T,
-        'n_classes': n_classes, 'n_clases': n_classes, 'classes': n_classes,
-        'semilla': semilla, 'seed': semilla,
-        'dropout_prob': dropout, 'dropout': dropout,
-        'hidden_units': hidden_units, 'hidden': hidden_units
-    }
-    params = {}
-    # Añadir los candidatos que existan en la firma
-    for name, val in candidato_map.items():
-        if name in sig.parameters and val is not None:
-            params[name] = val
-
-    # Añadir solo los model_kwargs que estén en la firma (evita TypeError)
-    for k, v in (model_kwargs or {}).items():
-        if k in sig.parameters:
-            params[k] = v
-    # Intentar construir
-    try:
-        modelo = model_class(**params)
-    except TypeError as e:
-        # Fallback: intentar pasar solo model_kwargs filtrados + parámetros mínimos
-        params_fallback = {}
-        for k, v in (model_kwargs or {}).items():
-            if k in sig.parameters:
-                params_fallback[k] = v
-        # Intentar agregar algunos candidatos básicos si existen
-        for name in ('in_ch', 'in_channels', 'n_canales', 'n_channels'):
-            if name in sig.parameters and in_ch is not None:
-                params_fallback[name] = in_ch
-        for name in ('T', 'samples'):
-            if name in sig.parameters and T is not None:
-                params_fallback[name] = T
-        for name in ('n_classes', 'n_clases'):
-            if name in sig.parameters and n_classes is not None:
-                params_fallback[name] = n_classes
-        modelo = model_class(**params_fallback)
-    return modelo
 
 # -----------------------------
 # Subsets definition
@@ -316,407 +212,292 @@ SUBSETS = {
     "comandos": dict(stim_min=6, stim_max=11, n_classes=6)
 }
 
-# -----------------------------
-# Device
-# -----------------------------
-if DEVICE is None:
-    device_str = "cuda" if torch.cuda.is_available() else "cpu"
-else:
-    device_str = DEVICE
-device = torch.device(device_str)
-print(f"[Launcher] Using device: {device}")
-
-# -----------------------------
-# Prepare master seed and seeds list
-# -----------------------------
-if MASTER_SEED is not None:
-    set_global_seed(MASTER_SEED, deterministic=DETERMINISTIC)
-    rng = np.random.default_rng(MASTER_SEED)
-    SEEDS_LIST = rng.integers(low=0, high=2**31 - 1, size=N_SEEDS).tolist()
-else:
-    SEEDS_LIST = list(range(N_SEEDS))
-
-print(f"[Launcher] MASTER_SEED={MASTER_SEED}, DETERMINISTIC={DETERMINISTIC}")
-print(f"[Launcher] SEEDS_LIST (len={len(SEEDS_LIST)}): {SEEDS_LIST}")
-
-# -----------------------------
-# Create experiment directory
-# -----------------------------
-EXPERIMENT_ROOT = make_experiment_root(EXPERIMENTS_ROOT, EXPERIMENT_NAME)
-print(f"[Launcher] Experiment root: {EXPERIMENT_ROOT}")
-
-# Save config (including seeds_list)
-save_experiment_config(EXPERIMENT_ROOT, MASTER_SEED, SEEDS_LIST)
-
-# -----------------------------
-# Discover subject files
-# -----------------------------
-subject_files = discover_subject_files(DATA_DIR)
-
-# Apply SUBJECT selection (None => all; list of ints => those subjects)
-if SUBJECT is None:
-    selected_files = subject_files
-else:
-    # accept int or list
-    if isinstance(SUBJECT, int):
-        wanted = [SUBJECT]
-    elif isinstance(SUBJECT, (list, tuple, np.ndarray)):
-        wanted = [int(x) for x in SUBJECT]
+# =====================================================================
+# INICIO DE EJECUCIÓN (Protegido para multiprocesamiento en Windows)
+# =====================================================================
+if __name__ == '__main__':
+    
+    if DEVICE is None:
+        device_str = "cuda" if torch.cuda.is_available() else "cpu"
     else:
-        raise ValueError("SUBJECT debe ser None, int o lista/tupla de ints.")
+        device_str = DEVICE
+    device = torch.device(device_str)
+    print(f"[Launcher] Using device: {device} | TARGET_IDX: {TARGET_IDX}")
 
-    # filter files by parsed subject number
-    selected_files = []
-    for p in subject_files:
-        num = _extract_subject_number_from_filename(p)
-        if num is not None and num in wanted:
-            selected_files.append(p)
-    if len(selected_files) == 0:
-        raise FileNotFoundError(f"No encontré archivos para SUBJECT={SUBJECT} en {DATA_DIR}. Archivos disponibles: {[p.name for p in subject_files]}")
+    if MASTER_SEED is not None:
+        set_global_seed(MASTER_SEED, deterministic=DETERMINISTIC)
+        rng = np.random.default_rng(MASTER_SEED)
+        SEEDS_LIST = rng.integers(low=0, high=2**31 - 1, size=N_SEEDS).tolist()
+    else:
+        SEEDS_LIST = list(range(N_SEEDS))
 
-subject_files = selected_files
+    EXPERIMENT_ROOT = make_experiment_root(EXPERIMENTS_ROOT, EXPERIMENT_NAME)
+    save_experiment_config(EXPERIMENT_ROOT, MASTER_SEED, SEEDS_LIST)
 
-print(f"[Launcher] Found {len(subject_files)} subject files. Selected SUBJECT={SUBJECT}")
+    subject_files = discover_subject_files(DATA_DIR)
 
-if not subject_files:
-    raise FileNotFoundError(f"No subject .npz files found in {DATA_DIR}")
+    if SUBJECT is not None:
+        wanted = [SUBJECT] if isinstance(SUBJECT, int) else [int(x) for x in SUBJECT]
+        selected_files = [p for p in subject_files if _extract_subject_number_from_filename(p) in wanted]
+        subject_files = selected_files
 
-# -----------------------------
-# Main loops
-# -----------------------------
-for subj_idx, subj_path in enumerate(subject_files, start=1):
-    subj_name = subj_path.stem
-    print(f"\n=== SUBJECT {subj_idx}/{len(subject_files)}: {subj_name} ===")
+    if not subject_files:
+        raise FileNotFoundError(f"No subject .npz files found in {DATA_DIR}")
 
-    # load subject NPZ (esperamos arrays 'data' y 'labels' con 3 columnas)
-    data = np.load(subj_path, allow_pickle=True)
-    X_all = data[NOMBRE_ARRAY_DATOS]    # (trials, channels, time)
-    Y_all = data[NOMBRE_ARRAY_ETIQUETAS]  # (trials, 3) -> [modalidad, estímulo, artefacto]
-    if Y_all.ndim != 2 or Y_all.shape[1] < 2:
-        raise ValueError(f"Labels for {subj_path} don't have at least 2 columns (modalidad, estímulo). Found shape {Y_all.shape}")
+    # -----------------------------
+    # Bucle Principal
+    # -----------------------------
+    for subj_idx, subj_path in enumerate(subject_files, start=1):
+        subj_name = subj_path.stem
+        print(f"\n=== SUBJECT {subj_idx}/{len(subject_files)}: {subj_name} ===")
 
-    estimulo = Y_all[:, 1].astype(int)  # 1..11 expected
-    # aca revisamos si que la forma de los datos sea (trial, canales, samples)
-    # si no es asi, la cambiamos a tal
-    # lo sabemos revisando si el 6 (canales) esta en la posicion que debe estar
-    if X_all.shape[1] != N_CHANNELS:
-        if X_all.shape[2] == N_CHANNELS: # (trials, samples, channels)
-            X_all = np.transpose(X_all, (0, 2, 1)) # (trials, channels, samples)
-        else:
-            raise ValueError(f"Data for {subj_path} has unexpected shape {X_all.shape}. Expected (trials, channels, samples) or (trials, samples, channels).")
-            
-    subj_out = EXPERIMENT_ROOT / subj_name
-    subj_out.mkdir(parents=True, exist_ok=True)
+        data = np.load(subj_path, allow_pickle=True)
+        X_all = data[NOMBRE_ARRAY_DATOS]    # (trials, channels, time)
+        Y_all = data[NOMBRE_ARRAY_ETIQUETAS]  # (trials, 3) -> [modalidad, estímulo, artefacto]
+        
+        if X_all.shape[1] != N_CHANNELS:
+            if X_all.shape[2] == N_CHANNELS: 
+                X_all = np.transpose(X_all, (0, 2, 1)) 
+            else:
+                raise ValueError("Dimensiones incorrectas en los datos.")
+                
+        subj_out = EXPERIMENT_ROOT / subj_name
+        subj_out.mkdir(parents=True, exist_ok=True)
 
-    for subset_name, params in SUBSETS.items():
-        stim_min = params['stim_min']
-        stim_max = params['stim_max']
-        n_classes = params['n_classes']
+        for subset_name, params in SUBSETS.items():
+            stim_min = params['stim_min']
+            stim_max = params['stim_max']
+            n_classes_stim = params['n_classes']
 
-        print(f"\n--- subset: {subset_name} (classes={n_classes}) ---")
-        mask = (estimulo >= stim_min) & (estimulo <= stim_max)
-        if mask.sum() == 0:
-            print(f"[Launcher] No samples for {subset_name} in {subj_name}. Skipping.")
-            continue
-
-        X_subset = X_all[mask]      # (N, C, T)
-        Y_subset_full = Y_all[mask]  # (N, 3)
-        global_indices = np.where(mask)[0]
-
-        # create subset folder
-        subset_out = subj_out / subset_name
-        subset_out.mkdir(parents=True, exist_ok=True)
-
-        for seed_i in range(N_SEEDS):
-            # use reproducible seed_val from SEEDS_LIST
-            seed_val = int(SEEDS_LIST[seed_i])
-            print(f"\n>>> seed {seed_i} (seed_val={seed_val})")
-            seed_out = subset_out / f"seed_{seed_i}"
-            seed_out.mkdir(parents=True, exist_ok=True)
-
-            # set seeds for this seed_val (reproducible per-seed)
-            set_global_seed(seed_val, deterministic=DETERMINISTIC)
-
-            skf = StratifiedKFold(n_splits=K_FOLDS, shuffle=True, random_state=seed_val)
-            splits = list(skf.split(X_subset, Y_subset_full[:, 1].astype(int)))
-            for fold_idx, (train_idx_local, test_idx_local) in enumerate(splits, start=1):
-                print(f"\n>>> Fold {fold_idx}/{len(splits)}")
-                fold_out = seed_out / f"fold_{fold_idx}"
-                fold_out.mkdir(parents=True, exist_ok=True)
-
-                metadata = {
-                    "subject_file": str(subj_path.name),
-                    "subject": subj_name,
-                    "subset": subset_name,
-                    "seed_idx": seed_i,
-                    "seed_val": seed_val,
-                    "fold_idx": fold_idx,
-                    "k_folds": K_FOLDS,
-                    "n_classes": n_classes,
-                    "normalization": {"mean": None, "std": None},
-                    "device": str(device),
-                    "status": "started",
-                    "error": None,
-                    "train_time_s": None,
-                    "augmentation_metadata_path": None,
-                    "model_name": MODEL_NAME,
-                    "model_kwargs": MODEL_KWARGS,
-                    "optimizer_kwargs": OPTIMIZER_KWARGS,
-                    "subject_selection": SUBJECT
-                }
-
-                if SAVE_TRAIN_INDEX:
-                    metadata["train_idx_local"] = train_idx_local.tolist()
-                    metadata["test_idx_local"] = test_idx_local.tolist()
-                    metadata["train_idx_global"] = global_indices[train_idx_local].tolist()
-                    metadata["test_idx_global"] = global_indices[test_idx_local].tolist()
-                    metadata["val_idx_local"] = None
-                    metadata["val_idx_global"] = None
-
-                try:
-                    # Build train/val/test arrays (splits are by trial)
-                    X_train_all = X_subset[train_idx_local]
-                    Y_train_all = Y_subset_full[train_idx_local]  # (n_train_trials, 3)
-                    X_test = X_subset[test_idx_local]
-                    Y_test = Y_subset_full[test_idx_local]
-
-                    # split train->train/val (stratify by stimulus column)
-                    if VAL_FRAC and VAL_FRAC > 0.0:
-                        idx_pool = np.arange(len(X_train_all))
-                        try:
-                            idx_train_rel, idx_val_rel = train_test_split(
-                                idx_pool,
-                                test_size=VAL_FRAC,
-                                stratify=Y_train_all[:, 1],
-                                random_state=seed_val,
-                                shuffle=True
-                            )
-                        except ValueError:
-                            idx_train_rel, idx_val_rel = train_test_split(
-                                idx_pool,
-                                test_size=VAL_FRAC,
-                                random_state=seed_val,
-                                shuffle=True
-                            )
-
-                        X_train = X_train_all[idx_train_rel]
-                        Y_train = Y_train_all[idx_train_rel]
-                        X_val = X_train_all[idx_val_rel]
-                        Y_val = Y_train_all[idx_val_rel]
-
-                        if SAVE_TRAIN_INDEX:
-                            val_idx_local = train_idx_local[idx_val_rel]
-                            metadata["val_idx_local"] = val_idx_local.tolist()
-                            metadata["val_idx_global"] = global_indices[val_idx_local].tolist()
-                    else:
-                        X_train = X_train_all
-                        Y_train = Y_train_all
-                        X_val = np.empty((0, *X_train.shape[1:]))
-                        Y_val = np.empty((0, Y_train.shape[1] if Y_train.ndim>1 else 3))
-                        if SAVE_TRAIN_INDEX:
-                            metadata["val_idx_local"] = []
-                            metadata["val_idx_global"] = []
-
-                    # -------------------------
-                    # Augmentation (online) - se llama con los trials originales de cada split
-                    # -------------------------
-                    augment_kwargs = dict(AUGMENT_KWARGS)  # copy defaults
-                    augment_kwargs.update(dict(seed=seed_val,
-                                               metadata_path=str(fold_out),
-                                               original_train_indices=train_idx_local,
-                                               original_val_indices=(val_idx_local if VAL_FRAC>0 else None),
-                                               original_test_indices=test_idx_local))
-                    X_train_aug, Y_train_aug, X_val_aug, Y_val_aug, X_test_aug, Y_test_aug = Augmentar(
-                        X_train, Y_train,
-                        X_val, Y_val,
-                        X_test, Y_test,
-                        **augment_kwargs
-                    )
-
-                    # guardo las columnas de etiquetas de augmentacion
-                    np.save(fold_out / "y_test.npy", Y_test_aug)
-
-                    # Save augmentation metadata path (Augmentar guarda augmentation_metadata.json en metadata_path)
-                    aug_meta_path = fold_out / "augmentation_metadata.json"
-                    if aug_meta_path.exists():
-                        metadata["augmentation_metadata_path"] = str(aug_meta_path)
-                        try:
-                            with open(aug_meta_path, 'r', encoding='utf8') as fh:
-                                aug_meta = json.load(fh)
-                            metadata["augmentation_summary"] = {
-                                "data_shapes": aug_meta.get("data_shapes"),
-                                "augmentation_factors": aug_meta.get("augmentation_factors"),
-                                "band_noise": aug_meta.get("band_noise"),
-                                "fts": aug_meta.get("fts"),
-                                "window_params": aug_meta.get("window_params")
-                            }
-                        except Exception:
-                            pass
-
-                    # -------------------------
-                    # Normalización z-score SOBRE X_train_aug
-                    # -------------------------
-                    mean, std = compute_zscore_params(X_train_aug)
-                    metadata["normalization"]["mean"] = mean
-                    metadata["normalization"]["std"] = std
-
-                    X_train_aug = apply_zscore(X_train_aug, mean, std)
-                    if X_val_aug.size:
-                        X_val_aug = apply_zscore(X_val_aug, mean, std)
-                    if X_test_aug.size:
-                        X_test_aug = apply_zscore(X_test_aug, mean, std)
-
-                    # -------------------------
-                    # Preparar labels: extraer columna estímulo y mapear a 0..n_classes-1
-                    # -------------------------
-                    def map_to_class_indices(Y_aug, subset_name):
-                        if Y_aug.size == 0:
-                            return np.array([], dtype=int)
-                        stim = Y_aug[:, 1].astype(int)
-                        if subset_name == "vocales":
-                            mapped = (stim - 1).astype(int)  # 1..5 -> 0..4
-                        else:
-                            mapped = (stim - 6).astype(int)  # 6..11 -> 0..5
-                        return mapped
-
-                    y_train_mapped = map_to_class_indices(Y_train_aug, subset_name)
-                    y_val_mapped = map_to_class_indices(Y_val_aug, subset_name)
-                    y_test_mapped = map_to_class_indices(Y_test_aug, subset_name)
-
-                    # -------------------------
-                    # Convert to tensors and dataloaders
-                    # -------------------------
-                    X_train_t = torch.tensor(X_train_aug, dtype=torch.float32)
-                    Y_train_t = torch.tensor(y_train_mapped, dtype=torch.long)
-                    X_test_t = torch.tensor(X_test_aug, dtype=torch.float32)
-                    Y_test_t = torch.tensor(y_test_mapped, dtype=torch.long)
-
-                    train_ds = TensorDataset(X_train_t, Y_train_t)
-                    test_ds = TensorDataset(X_test_t, Y_test_t)
-
-                    # only create val dataset/loader if non-empty
-                    if X_val_aug.size and y_val_mapped.size:
-                        X_val_t = torch.tensor(X_val_aug, dtype=torch.float32)
-                        Y_val_t = torch.tensor(y_val_mapped, dtype=torch.long)
-                        val_ds = TensorDataset(X_val_t, Y_val_t)
-                        val_loader = DataLoader(val_ds, batch_size=BATCH_SIZE, shuffle=False, num_workers=NUM_WORKERS)
-                    else:
-                        val_loader = None
-
-                    train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=SHUFFLE_TRAIN, num_workers=NUM_WORKERS)
-                    test_loader = DataLoader(test_ds, batch_size=BATCH_SIZE, shuffle=False, num_workers=NUM_WORKERS)
-
-                    metadata["n_train"] = int(len(train_ds))
-                    metadata["n_val"] = int(len(val_loader.dataset)) if val_loader is not None else 0
-                    metadata["n_test"] = int(len(test_ds))
-
-                    # -------------------------
-                    # Model, optimizer, trainer
-                    # -------------------------
-                    # Construir modelo con la función robusta que detecta la firma
-                    in_ch = int(X_train_aug.shape[1])
-                    T = int(X_train_aug.shape[2])
-
-                    model = construir_modelo(
-                        MODEL_CLASS,
-                        in_ch=in_ch,
-                        T=T,
-                        n_classes=n_classes,
-                        semilla=seed_val,
-                        dropout=DROPOUT,
-                        hidden_units=HIDDEN_UNITS,
-                        model_kwargs=MODEL_KWARGS
-                    )
-
-                    # Mover modelo a device
-                    model = model.to(device)
-
-                    # Construir optimizer Adam con los kwargs editables
-                    # NOTA: OPTIMIZER_KWARGS debería contener 'lr' al menos
-                    optimizer = optim.Adam(model.parameters(), **OPTIMIZER_KWARGS)
-                    loss_fn = nn.CrossEntropyLoss()
-
-                    model_output_path = str(fold_out / "best_model.pth") if SAVE_BEST_MODEL else None
-
-                    trainer = Entrenador(modelo=model, optimizador=optimizer, func_perdida=loss_fn,
-                                         device=str(device), parada_temprana=PATIENCE, log_dir=str(fold_out),
-                                         histogram_freq=0, save_model=SAVE_BEST_MODEL)
-
-                    # Train
-                    t0 = time.time()
-                    metrics = trainer.ajustar(cargador_entrenamiento=train_loader,
-                                             cargador_validacion=val_loader if val_loader is not None else None,
-                                             epocas=EPOCHS,
-                                             nombre_modelo_salida=model_output_path,
-                                             early_stop_patience=PATIENCE)
-                    t1 = time.time()
-                    metadata["train_time_s"] = float(t1 - t0)
-                    metadata["status"] = "trained"
-
-                    save_json(fold_out / "train_metrics.json", metrics)
-
-                    # Evaluate
-                    evaluator = Evaluador(modelo=trainer.modelo, device=str(device), clases=None)
-                    y_true_all, y_pred_all = evaluator.probar(test_loader)
-                    y_true_all = np.array(y_true_all).astype(int)
-                    y_pred_all = np.array(y_pred_all).astype(int)
-
-                    cm = confusion_matrix(y_true_all, y_pred_all, labels=np.arange(n_classes))
-                    report_dict = classification_report(y_true_all, y_pred_all, labels=np.arange(n_classes), output_dict=True, zero_division=0)
-                    acc = float(accuracy_score(y_true_all, y_pred_all))
-
-                    np.savez_compressed(fold_out / "test_preds.npz", y_true=y_true_all, y_pred=y_pred_all)
-                    np.save(fold_out / "confusion_matrix.npy", cm)
-                    save_json(fold_out / "classification_report.json", report_dict)
-
-                    metadata["status"] = "success"
-                    metadata["test_accuracy"] = acc
-                    metadata["trainer_run_metrics"] = metrics
-
-                    save_json(fold_out / "metadata.json", metadata)
-                    print(f"[Launcher] Fold completed OK. acc={acc:.4f} fold_dir={fold_out}")
-
-                except Exception:
-                    metadata["status"] = "error"
-                    tb = traceback.format_exc()
-                    metadata["error"] = tb
-                    save_json(fold_out / "metadata.json", metadata)
-                    print(f"[Launcher] ERROR on subject={subj_name} subset={subset_name} seed={seed_i} fold={fold_idx}")
-                    print(tb)
-
-                finally:
-                    # cleanup to avoid GPU memory leaks
-                    try:
-                        del trainer
-                    except Exception:
-                        pass
-                    try:
-                        del model
-                    except Exception:
-                        pass
-                    torch.cuda.empty_cache()
-
-# After all runs, build summary index
-print("\nAll experiments finished. Root results at:", EXPERIMENT_ROOT)
-all_meta = []
-for subj_dir in EXPERIMENT_ROOT.iterdir():
-    if not subj_dir.is_dir():
-        continue
-    for subset_dir in subj_dir.iterdir():
-        if not subset_dir.is_dir():
-            continue
-        for seed_dir in subset_dir.iterdir():
-            if not seed_dir.is_dir():
+            print(f"\n--- subset: {subset_name} ---")
+            # Siempre filtramos las ventanas por el subset (Vocales o Comandos)
+            mask = (Y_all[:, 1].astype(int) >= stim_min) & (Y_all[:, 1].astype(int) <= stim_max)
+            if mask.sum() == 0:
                 continue
-            for fold_dir in seed_dir.iterdir():
-                meta_file = fold_dir / "metadata.json"
-                if meta_file.exists():
-                    try:
-                        m = json.loads(meta_file.read_text(encoding="utf8"))
-                        all_meta.append(m)
-                    except Exception:
-                        pass
 
-summary_index_path = EXPERIMENT_ROOT / "summary_runs.json"
-save_json(summary_index_path, {"n_runs_indexed": len(all_meta), "runs": all_meta})
-print("Saved summary index:", summary_index_path)
+            X_subset = X_all[mask]      # (N, C, T)
+            Y_subset_full = Y_all[mask] # (N, 3)
+            global_indices = np.where(mask)[0]
+            
+            # Ajuste Dinámico de n_classes según el TARGET_IDX
+            if TARGET_IDX == 1:
+                n_classes_target = n_classes_stim
+            else:
+                # Para modalidad o artefacto, contamos las clases únicas en ese subset
+                n_classes_target = len(np.unique(Y_subset_full[:, TARGET_IDX]))
+
+            subset_out = subj_out / subset_name
+            subset_out.mkdir(parents=True, exist_ok=True)
+
+            for seed_i in range(N_SEEDS):
+                seed_val = int(SEEDS_LIST[seed_i])
+                print(f"\n>>> seed {seed_i} (seed_val={seed_val})")
+                seed_out = subset_out / f"seed_{seed_i}"
+                seed_out.mkdir(parents=True, exist_ok=True)
+
+                set_global_seed(seed_val, deterministic=DETERMINISTIC)
+
+                # Estratificamos según el TARGET que vamos a predecir
+                skf = StratifiedKFold(n_splits=K_FOLDS, shuffle=True, random_state=seed_val)
+                splits = list(skf.split(X_subset, Y_subset_full[:, TARGET_IDX].astype(int)))
+                
+                for fold_idx, (train_idx_local, test_idx_local) in enumerate(splits, start=1):
+                    print(f"\n>>> Fold {fold_idx}/{len(splits)}")
+                    fold_out = seed_out / f"fold_{fold_idx}"
+                    fold_out.mkdir(parents=True, exist_ok=True)
+
+                    metadata = {
+                        "subject": subj_name,
+                        "subset": subset_name,
+                        "seed_val": seed_val,
+                        "fold_idx": fold_idx,
+                        "target_idx": TARGET_IDX,
+                        "n_classes": n_classes_target,
+                        "normalization": {"mean": None, "std": None},
+                        "status": "started"
+                    }
+
+                    try:
+                        # 1. Split estricto de Trials (Prevención de Data Leakage)
+                        X_train_all = X_subset[train_idx_local]
+                        Y_train_all = Y_subset_full[train_idx_local]
+                        X_test_trials = X_subset[test_idx_local]
+                        Y_test_trials = Y_subset_full[test_idx_local]
+
+                        # Mapeo de Etiquetas a formato 0-indexed
+                        def adjust_labels_for_loss(Y_labels, subset_name, target_idx):
+                            Y_adj = Y_labels.copy()
+                            if target_idx == 1:
+                                # Estímulo
+                                stim = Y_adj[:, 1].astype(int)
+                                Y_adj[:, 1] = (stim - 1) if subset_name == "vocales" else (stim - 6)
+                            else:
+                                # Modalidad (0) o Artefacto (2) - Asegurar que empieza en 0
+                                val = Y_adj[:, target_idx].astype(int)
+                                Y_adj[:, target_idx] = val - np.min(val)
+                            return Y_adj
+
+                        Y_train_all = adjust_labels_for_loss(Y_train_all, subset_name, TARGET_IDX)
+                        Y_test_trials = adjust_labels_for_loss(Y_test_trials, subset_name, TARGET_IDX)
+
+                        if VAL_FRAC and VAL_FRAC > 0.0:
+                            idx_pool = np.arange(len(X_train_all))
+                            idx_train_rel, idx_val_rel = train_test_split(
+                                idx_pool, test_size=VAL_FRAC, 
+                                stratify=Y_train_all[:, TARGET_IDX], 
+                                random_state=seed_val + fold_idx, shuffle=True
+                            )
+                            X_train_trials = X_train_all[idx_train_rel]
+                            Y_train_trials = Y_train_all[idx_train_rel]
+                            X_val_trials = X_train_all[idx_val_rel]
+                            Y_val_trials = Y_train_all[idx_val_rel]
+                        else:
+                            X_train_trials = X_train_all
+                            Y_train_trials = Y_train_all
+                            X_val_trials, Y_val_trials = None, None
+
+                        # 2. Normalización Z-Score Aislada por Canal
+                        mean_val, std_val = compute_zscore_params(X_train_trials)
+                        X_train_trials = apply_zscore(X_train_trials, mean_val, std_val)
+                        if X_val_trials is not None:
+                            X_val_trials = apply_zscore(X_val_trials, mean_val, std_val)
+                        X_test_trials = apply_zscore(X_test_trials, mean_val, std_val)
+                        
+                        metadata["normalization"]["mean"] = mean_val.tolist()
+                        metadata["normalization"]["std"] = std_val.tolist()
+
+                        # 3. Datasets Online (Segmentación y Augmentación estocástica "al vuelo")
+                        train_ds = OnlineEEGDataset(
+                            X_train_trials, Y_train_trials, fs=AUGMENT_KWARGS['fs'],
+                            window_duration=AUGMENT_KWARGS['window_duration'], 
+                            window_shift=AUGMENT_KWARGS['window_shift'],
+                            modo='train',
+                            band_noise_factor=AUGMENT_KWARGS['band_noise_factor_train'],
+                            fts_factor=AUGMENT_KWARGS['fts_factor_train'],
+                            noise_magnitude_relative=AUGMENT_KWARGS['noise_magnitude_relative'],
+                            seed=seed_val
+                        )
+                        
+                        test_ds = OnlineEEGDataset(
+                            X_test_trials, Y_test_trials, fs=AUGMENT_KWARGS['fs'],
+                            window_duration=AUGMENT_KWARGS['window_duration'], 
+                            window_shift=AUGMENT_KWARGS['window_shift'],
+                            modo='test' 
+                        )
+
+                        if X_val_trials is not None:
+                            val_ds = OnlineEEGDataset(
+                                X_val_trials, Y_val_trials, fs=AUGMENT_KWARGS['fs'],
+                                window_duration=AUGMENT_KWARGS['window_duration'], 
+                                window_shift=AUGMENT_KWARGS['window_shift'],
+                                modo='val'
+                            )
+                            val_loader = DataLoader(
+                                val_ds, 
+                                batch_size=BATCH_SIZE, 
+                                shuffle=False, 
+                                num_workers=NUM_WORKERS,
+                                persistent_workers=True if NUM_WORKERS > 0 else False
+                            )
+                        else:
+                            val_loader = None
+
+                        train_loader = DataLoader(
+                            train_ds, 
+                            batch_size=BATCH_SIZE, 
+                            shuffle=SHUFFLE_TRAIN, 
+                            num_workers=NUM_WORKERS,
+                            persistent_workers=True if NUM_WORKERS > 0 else False  # <--- EVITA QUE WINDOWS CIERRE LOS PROCESOS
+                        )
+                        test_loader = DataLoader(
+                            test_ds, 
+                            batch_size=BATCH_SIZE, 
+                            shuffle=False, 
+                            num_workers=NUM_WORKERS,
+                            persistent_workers=True if NUM_WORKERS > 0 else False
+                        )
+
+                        # 4. Instanciación Explícita del Modelo
+                        in_ch = int(X_train_trials.shape[1])
+                        T = train_ds.duration_samples
+                        
+                        if MODEL_NAME == "EEGNet":
+                            model = EEGNet(in_ch=in_ch, T=T, n_classes=n_classes_target, semilla=seed_val, **MODEL_KWARGS)
+                        elif MODEL_NAME == "ShallowConvNet":
+                            model = ShallowConvNet(n_canales=in_ch, n_samples=T, n_clases=n_classes_target, **MODEL_KWARGS)
+                        elif MODEL_NAME == "DeepConvNet":
+                            model = DeepConvNet(n_canales=in_ch, n_samples=T, n_clases=n_classes_target, **MODEL_KWARGS)
+                        elif MODEL_NAME == "iSpeechCNN":
+                            model = iSpeechCNN(n_channels=in_ch, n_timepoints=T, n_classes=n_classes_target, semilla=seed_val, **MODEL_KWARGS)
+                        
+                        model = model.to(device)
+                        optimizer = optim.Adam(model.parameters(), **OPTIMIZER_KWARGS)
+                        loss_fn = nn.CrossEntropyLoss()
+
+                        model_output_path = str(fold_out / "best_model.pth") if SAVE_BEST_MODEL else None
+
+                        # 5. Entrenador (Pasando el TARGET_IDX)
+                        trainer = Entrenador(modelo=model, optimizador=optimizer, func_perdida=loss_fn,
+                                             device=str(device), parada_temprana=PATIENCE, log_dir=str(fold_out),
+                                             target_idx=TARGET_IDX, save_model=SAVE_BEST_MODEL)
+
+                        t0 = time.time()
+                        metrics = trainer.ajustar(cargador_entrenamiento=train_loader,
+                                                 cargador_validacion=val_loader,
+                                                 epocas=EPOCHS,
+                                                 nombre_modelo_salida=model_output_path)
+                        t1 = time.time()
+                        metadata["train_time_s"] = float(t1 - t0)
+
+                        save_json(fold_out / "train_metrics.json", metrics)
+
+                        # 6. Evaluador
+                        evaluator = Evaluador(modelo=trainer.modelo, device=str(device), target_idx=TARGET_IDX)
+                        y_true_all, y_pred_all = evaluator.probar(test_loader)
+                        
+                        cm = confusion_matrix(y_true_all, y_pred_all, labels=np.arange(n_classes_target))
+                        report_dict = classification_report(y_true_all, y_pred_all, labels=np.arange(n_classes_target), output_dict=True, zero_division=0)
+                        acc = float(accuracy_score(y_true_all, y_pred_all))
+
+                        np.savez_compressed(fold_out / "test_preds.npz", y_true=y_true_all, y_pred=y_pred_all)
+                        np.save(fold_out / "confusion_matrix.npy", cm)
+                        save_json(fold_out / "classification_report.json", report_dict)
+
+                        metadata["status"] = "success"
+                        metadata["test_accuracy"] = acc
+                        save_json(fold_out / "metadata.json", metadata)
+                        print(f"[Launcher] Fold OK. Acc={acc:.4f} Dir={fold_out}")
+
+                    except Exception:
+                        metadata["status"] = "error"
+                        tb = traceback.format_exc()
+                        metadata["error"] = tb
+                        save_json(fold_out / "metadata.json", metadata)
+                        print(f"[Launcher] ERROR: {tb}")
+
+                    finally:
+                        try: del trainer
+                        except: pass
+                        try: del model
+                        except: pass
+                        torch.cuda.empty_cache()
+
+    # Indexador de resúmenes
+    all_meta = []
+    for subj_dir in EXPERIMENT_ROOT.iterdir():
+        if not subj_dir.is_dir(): continue
+        for subset_dir in subj_dir.iterdir():
+            if not subset_dir.is_dir(): continue
+            for seed_dir in subset_dir.iterdir():
+                if not seed_dir.is_dir(): continue
+                for fold_dir in seed_dir.iterdir():
+                    meta_file = fold_dir / "metadata.json"
+                    if meta_file.exists():
+                        try:
+                            m = json.loads(meta_file.read_text(encoding="utf8"))
+                            all_meta.append(m)
+                        except: pass
+
+    summary_index_path = EXPERIMENT_ROOT / "summary_runs.json"
+    save_json(summary_index_path, {"n_runs_indexed": len(all_meta), "runs": all_meta})
+    print("\n[Launcher] Finalizado. Index guardado en:", summary_index_path)

@@ -1,15 +1,17 @@
-============================================================
+================================================================================
 Fecha: 2026-03-24 08:45
-============================================================
+================================================================================
 optimizado script de Bolaños y Rufiner
 implementado con wavelets (en algunos casos sobremuestreadas), skip si output existe
-las pruebas feitas con clasificacion binaria y multiclase (al menos para el sujeto 1) con el preprocesamiento tal cual estaba hecho en los script de MATLAB dispuestos por Bolanos no han sido capaces de replicar los resultados ni de obtener algo optimo
-hoy fue el primer dia en que empezamos a trabajar con un agente de ia en el proyecto (OpenCode)
-============================================================
+las pruebas feitas con clasificacion binaria y multiclase (al menos para el sujeto 1)
+con el preprocesamiento tal cual estaba hecho en los script de MATLAB dispuestos por
+Bolanos no han sido capaces de replicar los resultados ni de obtener algo optimo
+hoy fue el primer dia en que empezamos a trabajar con un agente de ia en el proyecto
+================================================================================
 
-============================================================
+================================================================================
 Fecha: 2026-03-25
-============================================================
+================================================================================
 TRABAJO REALIZADO:
 
 1. Exploración del repositorio GitHub externo LTU-Machine-Learning/Rethinking-Methods-Inner-Speech:
@@ -35,7 +37,6 @@ TRABAJO REALIZADO:
 4. Modificación de src/experimento_CNNs.py:
    - Agregado import de iSpeechCNN
    - Agregado bloque de selección de modelo para iSpeechCNN
-   -LISTO para pruebas con el nuevo modelo
 
 5. Preparación de prueba preliminar:
    - Configuración para ejecutar con 1 sujeto, sin augmentación
@@ -44,9 +45,51 @@ TRABAJO REALIZADO:
 
 OBJETIVO: Probar si el modelo más grande (iSpeech-CNN) puede resolver el problema
 de clasificación de habla imaginada que las redes más pequeñas no lograron resolver.
-============================================================
-optimizado script de Bolaños y Rufiner
-implementado con wavelets (en algunos casos sobremuestreadas), skip si output existe
-las pruebas hechas con clasificacion binaria y multiclase (al menos para el sujeto 1) con el preprocesamiento tal cual estaba hecho en los script de MATLAB dispuestos por Bolanos no han sido capaces de replicar los resultados ni de obtener algo optimo
-hoy fue el primer dia en que empezamos a trabajar con un agente de ia en el proyecto (OpenCode)
-============================================================
+================================================================================
+
+================================================================================
+Fecha: 2026-04-20
+================================================================================
+TRABAJO REALIZADO:
+
+1. ANÁLISIS DEL FILTRO FIR DE LIWICKI (BUG DESCUBIERTO):
+   - Revisamos el código de preprocesamiento de Liwicki (prepro_DFICA_for_vowels.m)
+   - Parámetros del filtro: lowpass n=372 @ 2Hz, highpass n=1204 @ 40Hz
+   - Descubrimiento: el filtro FIR de orden 372 tiene una zona de transición RIDÍCULAMENTE
+     amplia. A 10 Hz ya pierde -58dB, destruyendo casi toda la señal EEG útil.
+   - Resultado: El filtro elimina ~100% de la potencia en 2-10 Hz y 10-20 Hz, solo pasa 20-40 Hz
+   - Los datos preprocesados de Liwicki tienen el filtro ya aplicado (no hay versión sin filtro)
+
+2. ANÁLISIS DE NUESTROS DATOS PREPROCESADOS:
+   - Revisamos data/preprocessed/ para todos los sujetos
+   - Formato de labels: [modalidad, estímulo, artefacto]
+     - Modalidad: 1=Imaginada, 2=Pronunciada
+     - Estímulo: 1-5 (vocales), 6-11 (comandos)
+     - Artefacto: 1=Limpio, 2=Parpadeo
+
+3. CREACIÓN DEL DATASET LIMPIO (data/clean_preprocessed/):
+   - Filtramos data/preprocessed/ por:
+     * Solo imaginada (modalidad == 1)
+     * Solo limpia (artefacto == 1, sin parpadeo)
+   - Resultado: 5,449 trials (de ~9,400 originales, 58% retención)
+   - Mejor sujeto: S09 con 428 trials limpios
+   - Archivos: S01_clean.npz hasta S15_clean.npz
+
+4. CREACIÓN DEL DATASET SINTÉTICO CON LABELS INCRUSTADAS (data/synthetic_labels/):
+   - Propósito: Testing del pipeline de entrenamiento
+   - Método: Añadir sinusoidal a frecuencia única para cada estímulo
+   - Frecuencias: 20Hz a 40Hz (de 2 en 2 Hz), magnitud FFT objetivo = 10000
+   - Formula: señal += 39.0625 * sin(2*pi*freq*t)
+   - Verificación: FFT muestra picos exactos en las frecuencias设计adas
+   - Archivos: S01_synthetic.npz hasta S15_synthetic.npz (9,315 trials)
+
+5. MODIFICACIONES EN SCRIPTS:
+   - src/like_liwicki/pruebas_datos_repositorio.py: Adaptado para visualizar datos
+   - src/like_liwicki/analisis_filtro_liwicki.py: Nuevo script para analizar filtros
+
+RESUMEN:
+- Bug encontrado en el preprocesamiento de Liwicki (filtro FIR defectuoso)
+- Dataset limpio creado para entrenamiento óptimo
+- Dataset sintético creado para testing del pipeline
+- Listos para probar el entrenamiento con los nuevos datasets
+================================================================================

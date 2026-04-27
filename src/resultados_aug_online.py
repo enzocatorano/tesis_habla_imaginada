@@ -21,7 +21,7 @@ from typing import List, Dict, Tuple
 
 # ---------------- CONFIG ----------------
 EXPERIMENTS_ROOT = Path(__file__).resolve().parents[1] / "experiments"
-EXPERIMENT_NAME_PREFIX = "S09_sintetico_20260420-105839_CatoranoBrothers"  # Asegúrate de que coincida con tu prefijo actual
+EXPERIMENT_NAME_PREFIX = "1024_clean_EEGNet_20260427-055419_CatoranoBrothers"
 OUTPUT_SUBDIR = "visualization_results"
 
 VOCAL_CLASS_NAMES = ['A', 'E', 'I', 'O', 'U']
@@ -290,12 +290,24 @@ def plot_metrics_boxplots(data_vocales, data_comandos, output_path: Path, subjec
         apply_custom_boxplot(ax, all_data, positions, labels, plot_colors)
         ax.set_ylabel("Score")
         
-        chance_level = 1.0 / 5  # Baseline conservador
-        ax.axhline(y=chance_level, color='gray', linestyle=':', linewidth=2, label=f'Chance (~{chance_level:.2f})')
+        chance_level_vocales = 1.0 / 5  # 0.20
+        chance_level_comandos = 1.0 / 6  # ~0.167
+        
+        # Agregar línea de chance para cada subset
+        for subset_name in ["Vocales", "Comandos"]:
+            # Encontrar la posición del primer y último boxplot de ese subset
+            subset_positions = [p for p, l in zip(positions, labels) if l.startswith(subset_name)]
+            if not subset_positions:
+                continue
+            
+            chance = chance_level_vocales if subset_name == "Vocales" else chance_level_comandos
+            ax.axhline(y=chance, color='gray', linestyle=':', linewidth=2, 
+                      label=f'{subset_name} Chance (~{chance:.3f})')
 
         min_val = np.nanmin([np.nanmin(d) for d in all_data if d.size > 0])
         max_val = np.nanmax([np.nanmax(d) for d in all_data if d.size > 0])
-        ax.set_ylim(max(0, min(min_val, chance_level) - 0.05), min(1.0, max(max_val, chance_level) + 0.05))
+        chance_min = min(chance_level_vocales, chance_level_comandos)  # 0.167
+        ax.set_ylim(max(0, min(min_val, chance_min) - 0.05), min(1.0, max(max_val, 0.25) + 0.05))
         ax.set_title(f"Metrics Distribution - {subject_name}", fontweight='bold')
         ax.legend()
     
@@ -373,16 +385,135 @@ def plot_global_metrics_boxplots(all_subjects_data: Dict, output_path: Path):
     if all_data:
         apply_custom_boxplot(ax, all_data, positions, labels, plot_colors)
         ax.set_ylabel("Score")
-        chance_level = 1.0 / 5
-        ax.axhline(y=chance_level, color='gray', linestyle=':', linewidth=2, label=f'Chance (~{chance_level:.2f})')
+        
+        # Agregar línea de chance separada para cada subset
+        for subset_name in SUBSETS:
+            subset_positions = [p for p, l in zip(positions, labels) if l.startswith(subset_name)]
+            if not subset_positions:
+                continue
+            
+            chance = 1.0 / 5 if subset_name == "vocales" else 1.0 / 6
+            ax.axhline(y=chance, color='gray', linestyle=':', linewidth=2, 
+                      label=f'{subset_name.capitalize()} Chance (~{chance:.3f})')
+        
         min_val = np.nanmin([np.nanmin(d) for d in all_data if len(d) > 0])
         max_val = np.nanmax([np.nanmax(d) for d in all_data if len(d) > 0])
-        ax.set_ylim(max(0, min(min_val, chance_level) - 0.05), min(1.0, max(max_val, chance_level) + 0.05))
+        chance_min = 1.0 / 6  # Usar el menor chance para el ylim
+        ax.set_ylim(max(0, min(min_val, chance_min) - 0.05), min(1.0, max(max_val, 0.25) + 0.05))
         ax.set_title("Global Metrics Distribution (Across Subjects)", fontweight='bold')
         ax.legend()
     
     fig.tight_layout()
     fig.savefig(output_path, bbox_inches='tight')
+    plt.close(fig)
+
+
+def plot_global_precision_by_subject(all_subjects_data: Dict, output_path: Path):
+    """
+    Genera boxplots de precisión por cada sujeto, con promedio entre sujetos a la derecha.
+    Dos subplots: Vocales (arriba) y Comandos (abajo).
+    """
+    fig, axes = plt.subplots(2, 1, figsize=(14, 10), sharex=False)
+    
+    # Extraer lista de sujetos ordenada
+    subject_names = sorted([k for k in all_subjects_data.keys()])
+    n_subjects = len(subject_names)
+    
+    for ax, subset_name in zip(axes, SUBSETS):
+        # Recolectar precisión de cada pliegue para cada sujeto
+        all_precision_per_subject = []  # Lista de listas: [ [prec_fold1, fold2, ...], ... ]
+        
+        for subj_name in subject_names:
+            subj_data = all_subjects_data.get(subj_name)
+            if subj_data is None:
+                all_precision_per_subject.append([])
+                continue
+            
+            subset_data = subj_data.get(subset_name)
+            if subset_data is None or not subset_data.get("metrics"):
+                all_precision_per_subject.append([])
+                continue
+            
+            # Recolectar precisiones de todos los folds/seeds
+            precisions = [m["precision"] for m in subset_data["metrics"] if "precision" in m]
+            all_precision_per_subject.append(precisions)
+        
+        # Crear posiciones para boxplots: 15 sujetos + 1 para promedio
+        positions = list(range(n_subjects))  # 0-14
+        avg_position = n_subjects + 0.5  # Separado a la derecha
+        
+        # Calcular promedio por sujeto (media de precisiones de todos los folds)
+        subject_means = []
+        for prec_list in all_precision_per_subject:
+            if prec_list:
+                subject_means.append(np.mean(prec_list))
+            else:
+                subject_means.append(np.nan)
+        
+        # Preparar datos para boxplots
+        box_data = []
+        box_positions = []
+        jitter_data = []
+        jitter_positions = []
+        
+        # Boxplots individuales por sujeto
+        for i, prec_list in enumerate(all_precision_per_subject):
+            if prec_list:
+                box_data.append(prec_list)
+                box_positions.append(positions[i])
+                # Puntos con jitter
+                jitter_data.extend(prec_list)
+                jitter_positions.extend([positions[i]] * len(prec_list))
+        
+        # Boxplot del promedio entre sujetos
+        valid_means = [m for m in subject_means if not np.isnan(m)]
+        if valid_means:
+            box_data.append(valid_means)
+            box_positions.append(avg_position)
+            jitter_data.extend(valid_means)
+            jitter_positions.extend([avg_position] * len(valid_means))
+        
+        # Graficar
+        if box_data:
+            # Boxplots
+            bp = ax.boxplot(box_data, positions=box_positions, widths=0.3,
+                           showfliers=False, manage_ticks=False,
+                           patch_artist=True,
+                           medianprops=dict(color="orange", linewidth=1.5),
+                           whiskerprops=dict(color="#264653", alpha=0.7),
+                           capprops=dict(color="#264653", alpha=0.7),
+                           boxprops=dict(facecolor="#2a9d8f", color="#264653", alpha=0.5))
+            
+            # Scatter points con jitter
+            jitter = np.random.normal(0, 0.04, size=len(jitter_data))
+            ax.scatter(jitter_positions, jitter_data, color="#264653", alpha=0.6, s=30, 
+                      edgecolors='white', linewidths=0.5, zorder=3)
+        
+        # Configurar ejes
+        all_x = list(range(n_subjects)) + [avg_position]
+        subject_labels = subject_names + ["AVG"]
+        ax.set_xticks(all_x)
+        ax.set_xticklabels(subject_labels, rotation=45, ha='right', fontsize=8)
+        
+        # Línea de chance
+        chance = 1.0 / 5 if subset_name == "vocales" else 1.0 / 6
+        ax.axhline(y=chance, color='red', linestyle='--', linewidth=2, 
+                  label=f'Chance (~{chance:.3f})')
+        
+        ax.set_ylabel("Precision", fontsize=11)
+        ax.set_title(f"{subset_name.capitalize()} - Precision by Subject", fontsize=12, fontweight='bold')
+        ax.legend(loc='upper right')
+        ax.grid(axis='y', linestyle='--', alpha=0.3)
+        
+        # Ajustar ylim
+        y_min = max(0, min(chance - 0.05, np.nanmin(jitter_data) if jitter_data else 0))
+        y_max = min(1.0, max(chance + 0.15, np.nanmax(jitter_data) if jitter_data else 0.2))
+        ax.set_ylim(y_min, y_max)
+    
+    axes[-1].set_xlabel("Subject", fontsize=11)
+    fig.suptitle("Precision by Subject (with AVG)", fontsize=14, fontweight='bold')
+    fig.tight_layout(rect=[0, 0, 1, 0.96])
+    fig.savefig(output_path, dpi=200, bbox_inches='tight')
     plt.close(fig)
 
 
@@ -445,6 +576,7 @@ if __name__ == "__main__":
     
     plot_global_metrics_boxplots(all_subjects_data, global_out / "metrics_boxplots_global.png")
     plot_global_confusion_matrices(all_subjects_data, global_out / "confusion_matrices_global.png")
+    plot_global_precision_by_subject(all_subjects_data, global_out / "precision_by_subject_global.png")
     
     global_summary = {
         "experiment_root": str(EXP_ROOT),

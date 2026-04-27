@@ -93,3 +93,64 @@ RESUMEN:
 - Dataset sintético creado para testing del pipeline
 - Listos para probar el entrenamiento con los nuevos datasets
 ================================================================================
+
+================================================================================
+Fecha: 2026-04-27
+================================================================================
+TRABAJO REALIZADO:
+
+1. ANÁLISIS DEL NOTEBOOK BASELINE EEGNET (colaborations/deepak_shravan/):
+   - Revisamos 01_baseline_eegnet.ipynb: TensorFlow/Keras EEGNet baseline
+   - Pipeline: S14, 351 trials imaginados, 11 clases
+   - Resultados: ~12.82% accuracy (vs 9.09% random chance)
+   - Sobreajuste severo: training ~99%, test ~13%
+   - Modelo EEGNet con arquitectura Lawhern: Conv2D→DepthwiseConv2D→SeparableConv2D→Dense
+   - Hiperparámetros: 50 epochs, batch=16, dropout=0.5, LR=Adam default
+
+2. CREACIÓN DEL DATASET clean_1024hz (data/clean_1024hz/):
+   - Filtrado: solo habla imaginada (modalidad=1) + sin parpadeo (artefacto=1)
+   - MANTIENE frecuencia de sampleo original: 1024 Hz (SIN submuestreo)
+   - Shape: (trials, 6, 4096) @ 1024Hz
+   - Total: 5,449 trials (de ~9,315 originales, 58% retención)
+   - Script: src/generate_clean_1024hz.py
+   - Logs: process_log.json
+
+3. CREACIÓN DEL DATASET original_reshaped (data/original_reshaped/):
+   - SOLO reordena de flatten a formato (6, 4096)
+   - MANTIENE TODOS los trials (sin filtrar: modalidad 1 y 2, artefacto 1 y 2)
+   - Shape: (trials, 6, 4096) @ 1024Hz
+   - Total: 9,315 trials (15 sujetos)
+   - Script: src/generate_original_reshaped.py
+   - Logs: process_log.json
+   - S14 y S15 completados manualmente (script se cortó por timeout)
+
+4. MODIFICACIONES EN resultados_aug_online.py:
+   - Líneas de chance separadas:
+     * Vocales: 0.20 (1/5)
+     * Comandos: 0.167 (1/6)
+   - Nuevo gráfico: plot_global_precision_by_subject()
+     * Boxplots por sujeto (S01-S15)
+     * Boxplot AVG a la derecha con medias por sujeto
+   - Fix: error de sintaxis en plot_metrics_boxplots (chance_level no definido)
+
+5. EXPERIMENTOS BASELINE EEGNet A 1024Hz:
+   - Experimento 1 (S01-S13): 390 runs, todos exitosos
+   - Experimento 2 (S14-S15): 60 runs, todos exitosos
+   - Config: EEGNet, epochs=50, batch=16, LR=0.001, dropout=0.5
+   - Augmentación: OFF (band_noise=0, fts=0)
+   - Accuracy promedio: ~18.2% (cercano a chance)
+
+6. UNIFICACIÓN DE EXPERIMENTOS:
+   - Copiamos S14_EEG y S15_EEG del Experimento 2 al Experimento 1
+   - Combinamos summary_runs.json: 390 + 60 = 450 runs
+   - Resultado: experiments/1024_EEGNet_20260425-092652_CatoranoBrothers/
+     con 15 sujetos, 450 runs
+   - visualization_results/ eliminado (para regenerar después)
+
+RESUMEN:
+- Datasets generados a 1024Hz (originales, sin submuestreo)
+- Pipeline de experimentos verificado con todos los sujetos
+- Baseline EEGNet a 1024Hz: ~18.2% accuracy
+- Resultados consistentes con chance (modelo no generaliza bien)
+- Listos para probar augmentación u otros modelos
+================================================================================

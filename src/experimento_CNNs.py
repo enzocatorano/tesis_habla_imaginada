@@ -40,10 +40,10 @@ from models import EEGNet, ShallowConvNet, DeepConvNet, iSpeechCNN
 # -----------------------------
 # CONFIGURACIÓN (modificar aquí)
 # -----------------------------
-DATA_DIR = Path(__file__).resolve().parents[1] / "data" / "synthetic_labels"
+DATA_DIR = Path(__file__).resolve().parents[1] / "data" / "clean_1024hz"
 EXPERIMENTS_ROOT = Path(__file__).resolve().parents[1] / "experiments"
-EXPERIMENT_NAME = "S09_sintetico"
-SUFIJO_DATOS = '_synthetic'
+EXPERIMENT_NAME = "1024_clean_EEGNet"
+SUFIJO_DATOS = '_clean_1024'
 NOMBRE_ARRAY_DATOS, NOMBRE_ARRAY_ETIQUETAS = "x", "y"
 N_CHANNELS = 6
 
@@ -51,22 +51,22 @@ N_CHANNELS = 6
 TARGET_IDX = 1
 
 # experiment control
-MASTER_SEED = None    # setea a None si no querés seed maestro
+MASTER_SEED = 17    # setea a None si no querés seed maestro
 DETERMINISTIC = False # True => intenta operaciones deterministas en PyTorch
 
-N_SEEDS = 1
+N_SEEDS = 3
 K_FOLDS = 5
-VAL_FRAC = 0.1
+VAL_FRAC = 0.2
 
 # training hyperparams
-BATCH_SIZE = 64
-EPOCHS = 100
-LR = 1e-4
-PATIENCE = 20
-DROPOUT = 0.1
+BATCH_SIZE = 16
+EPOCHS = 50
+LR = 1e-3
+PATIENCE = 50
+DROPOUT = 0.5
 HIDDEN_UNITS = None
 
-SUBJECT = [9]
+SUBJECT = None
 
 DEVICE = None         # None => autodetect
 NUM_WORKERS = 0       # IMPORTANTE: Subir a 2, 4 u 8 para que el CPU procese el Online Dataset sin frenar la GPU
@@ -77,7 +77,7 @@ SAVE_BEST_MODEL = False
 # -----------------------------
 # MODEL selection block
 # -----------------------------
-MODEL_NAME = "iSpeechCNN"
+MODEL_NAME = "EEGNet"
 
 if MODEL_NAME == "EEGNet":
     MODEL_CLASS = EEGNet

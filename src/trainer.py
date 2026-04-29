@@ -64,7 +64,7 @@ class Entrenador:
         perdida_total = 0.0
         n_samples = 0
         
-        for x, y_full in tqdm(cargador_entrenamiento, desc=f"Epoca {epoca} Entrenamiento", leave=False):
+        for x, y_full in tqdm(cargador_entrenamiento, desc=f"Epoca {epoca} Entrenamiento", position=1, leave=True):
             x = x.to(self.device)
             # Extracción dinámica del objetivo según target_idx
             y_target = y_full[:, self.target_idx].to(self.device)
@@ -93,7 +93,7 @@ class Entrenador:
         n_samples = 0
         
         with torch.no_grad():
-            for x, y_full in tqdm(cargador_validacion, desc=f"Epoca {epoca} Validacion", leave=False):
+            for x, y_full in tqdm(cargador_validacion, desc=f"Epoca {epoca} Validacion", position=1, leave=True):
                 x = x.to(self.device)
                 y_target = y_full[:, self.target_idx].to(self.device)
                 
@@ -115,29 +115,39 @@ class Entrenador:
         return perdida_promedio, precision
 
     def ajustar(self,
-                cargador_entrenamiento: DataLoader,
-                cargador_validacion: DataLoader = None,
-                epocas: int = 100,
-                nombre_modelo_salida: str = None,
-                early_stop_patience: int = None):
+                 cargador_entrenamiento: DataLoader,
+                 cargador_validacion: DataLoader = None,
+                 epocas: int = 100,
+                 nombre_modelo_salida: str = None,
+                 early_stop_patience: int = None):
         
         train_losses, val_losses, val_accs = [], [], []
         best_val_loss = float('inf')
         best_epoch = -1
         epochs_no_improve = 0
         best_state = copy.deepcopy(self.modelo.state_dict())
-
+        
         patience = early_stop_patience if early_stop_patience is not None else self.parada_temprana
-
+        
+        # Crear barra global de épocas
+        pbar = tqdm(total=epocas, desc="Entrenando", position=0, leave=True)
+        
         for ep in range(1, epocas + 1):
             t_loss = self._epoca_entrenamiento(cargador_entrenamiento, ep)
             train_losses.append(t_loss)
-
+            
             if cargador_validacion is not None:
                 v_loss, v_acc = self._epoca_validacion(cargador_validacion, ep)
                 val_losses.append(v_loss)
                 val_accs.append(v_acc)
-
+                
+                # Actualizar barra con métricas
+                pbar.set_postfix({
+                    "loss": f"{t_loss:.4f}",
+                    "val_loss": f"{v_loss:.4f}",
+                    "val_acc": f"{v_acc:.4f}"
+                })
+                
                 if v_loss < best_val_loss:
                     best_val_loss = v_loss
                     best_epoch = ep
@@ -148,17 +158,23 @@ class Entrenador:
                         torch.save(best_state, nombre_modelo_salida)
                 else:
                     epochs_no_improve += 1
-
+                
                 if patience and epochs_no_improve >= patience:
                     print(f"[Entrenador] Parada temprana en época {ep}")
+                    pbar.close()
                     break
             else:
                 val_losses.append(None)
                 val_accs.append(None)
-
+                pbar.set_postfix({"loss": f"{t_loss:.4f}"})
+            
+            pbar.update(1)
+        
+        pbar.close()
+        
         if cargador_validacion is not None:
             self.modelo.load_state_dict(best_state)
-
+        
         self.escritor.close()
         
         metrics = {

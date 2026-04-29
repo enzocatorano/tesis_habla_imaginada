@@ -46,9 +46,11 @@ EXPERIMENT_NAME = "1024_clean_EEGNet"
 SUFIJO_DATOS = '_clean_1024'
 NOMBRE_ARRAY_DATOS, NOMBRE_ARRAY_ETIQUETAS = "x", "y"
 N_CHANNELS = 6
+FS = 1024  # Frecuencia de muestreo de los datos (Hz)
 
 # TARGET SELECTION (0: Modalidad, 1: Estímulo, 2: Artefacto)
 TARGET_IDX = 1
+UNIFIED_STIM = True  # Solo aplica si TARGET_IDX == 1: True = 11 clases de estímulo (sin split vocales/comandos)
 
 # experiment control
 MASTER_SEED = 17    # setea a None si no querés seed maestro
@@ -116,7 +118,7 @@ OPTIMIZER_KWARGS = dict(lr=LR,
 AUGMENT_KWARGS = dict(
     window_duration=4.0,
     window_shift=4.0,
-    fs=128,
+    fs=FS,
     band_noise_factor_train=0.0, # Ajusta tu probabilidad real aquí (ej. 0.3)
     fts_factor_train=0.0,        # Ajusta tu probabilidad real aquí (ej. 0.3)
     noise_magnitude_relative=0.025
@@ -161,6 +163,7 @@ def save_experiment_config(exp_root: Path, master_seed, seeds_list):
     config = {
         "experiment_name": EXPERIMENT_NAME,
         "target_idx": TARGET_IDX,
+        "unified_stim": UNIFIED_STIM,
         "data_dir": str(DATA_DIR),
         "experiments_root": str(EXPERIMENTS_ROOT),
         "n_seeds": N_SEEDS,
@@ -264,19 +267,44 @@ if __name__ == '__main__':
         subj_out = EXPERIMENT_ROOT / subj_name
         subj_out.mkdir(parents=True, exist_ok=True)
 
-        for subset_name, params in SUBSETS.items():
-            stim_min = params['stim_min']
-            stim_max = params['stim_max']
-            n_classes_stim = params['n_classes']
+        # Determinar subsets a procesar según TARGET_IDX y UNIFIED_STIM
+        if TARGET_IDX == 1:
+            if UNIFIED_STIM:
+                # 11 clases de estímulo (1-11) sin split en vocales/comandos
+                subsets_to_process = [("estimulo_unificado", {
+                    "stim_min": 1, "stim_max": 11, "n_classes": 11
+                })]
+            else:
+                # Comportamiento original: iterar sobre SUBSETS (vocales, comandos)
+                subsets_to_process = list(SUBSETS.items())
+        elif TARGET_IDX in (0, 2):
+            # Predicción de modalidad/artefacto: dataset completo, sin filtrar por estímulo
+            target_names = {0: "modalidad", 2: "artefacto"}
+            subsets_to_process = [(target_names[TARGET_IDX], {
+                "stim_min": None, "stim_max": None, "n_classes": None
+            })]
+        else:
+            raise ValueError(f"TARGET_IDX {TARGET_IDX} no soportado. Valores válidos: 0,1,2.")
 
+        for subset_name, params in subsets_to_process:
+            stim_min = params.get('stim_min')
+            stim_max = params.get('stim_max')
+            n_classes_stim = params.get('n_classes')
             print(f"\n--- subset: {subset_name} ---")
-            # Siempre filtramos las ventanas por el subset (Vocales o Comandos)
-            mask = (Y_all[:, 1].astype(int) >= stim_min) & (Y_all[:, 1].astype(int) <= stim_max)
-            if mask.sum() == 0:
-                continue
 
-            X_subset = X_all[mask]      # (N, C, T)
-            Y_subset_full = Y_all[mask] # (N, 3)
+            # Filtrar datos según TARGET_IDX
+            if TARGET_IDX == 1:
+                mask = (Y_all[:, 1].astype(int) >= stim_min) & (Y_all[:, 1].astype(int) <= stim_max)
+                if mask.sum() == 0:
+                    print(f"No se encontraron trials para {subset_name}, saltando.")
+                    continue
+                X_subset = X_all[mask]
+                Y_subset_full = Y_all[mask]
+            else:
+                # TARGET_IDX != 1: dataset completo, sin filtro de estímulo
+                mask = np.ones(X_all.shape[0], dtype=bool)
+                X_subset = X_all
+                Y_subset_full = Y_all
             global_indices = np.where(mask)[0]
             
             # Ajuste Dinámico de n_classes según el TARGET_IDX
@@ -325,20 +353,22 @@ if __name__ == '__main__':
                         Y_test_trials = Y_subset_full[test_idx_local]
 
                         # Mapeo de Etiquetas a formato 0-indexed
-                        def adjust_labels_for_loss(Y_labels, subset_name, target_idx):
+                        def adjust_labels_for_loss(Y_labels, target_idx, stim_min=None):
                             Y_adj = Y_labels.copy()
                             if target_idx == 1:
-                                # Estímulo
+                                if stim_min is None:
+                                    raise ValueError("stim_min es requerido para TARGET_IDX=1")
                                 stim = Y_adj[:, 1].astype(int)
-                                Y_adj[:, 1] = (stim - 1) if subset_name == "vocales" else (stim - 6)
+                                Y_adj[:, 1] = stim - stim_min  # Offset automático según stim_min
                             else:
                                 # Modalidad (0) o Artefacto (2) - Asegurar que empieza en 0
                                 val = Y_adj[:, target_idx].astype(int)
                                 Y_adj[:, target_idx] = val - np.min(val)
                             return Y_adj
 
-                        Y_train_all = adjust_labels_for_loss(Y_train_all, subset_name, TARGET_IDX)
-                        Y_test_trials = adjust_labels_for_loss(Y_test_trials, subset_name, TARGET_IDX)
+                        stim_min_adj = stim_min if TARGET_IDX == 1 else None
+                        Y_train_all = adjust_labels_for_loss(Y_train_all, TARGET_IDX, stim_min=stim_min_adj)
+                        Y_test_trials = adjust_labels_for_loss(Y_test_trials, TARGET_IDX, stim_min=stim_min_adj)
 
                         if VAL_FRAC and VAL_FRAC > 0.0:
                             idx_pool = np.arange(len(X_train_all))

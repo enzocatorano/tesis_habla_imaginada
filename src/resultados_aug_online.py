@@ -24,15 +24,40 @@ EXPERIMENTS_ROOT = Path(__file__).resolve().parents[1] / "experiments"
 EXPERIMENT_NAME_PREFIX = "1024_clean_EEGNet_20260427-055419_CatoranoBrothers"
 OUTPUT_SUBDIR = "visualization_results"
 
-VOCAL_CLASS_NAMES = ['A', 'E', 'I', 'O', 'U']
-COMANDO_CLASS_NAMES = ['Arriba', 'Abajo', 'Izquierda', 'Derecha', 'Adelante', 'Atras']
-SUBSETS = ["vocales", "comandos"]
 METRICS_NAMES = ["Precision", "Recall", "F1-Score"]
 
 sns.set_style("whitegrid")
 plt.rcParams['figure.dpi'] = 200
 COLORS = ['#264653', '#2a9d8f', '#e9c46a', '#f4a261', '#e76f51']
 # ----------------------------------------
+
+def get_expected_subsets(exp_config):
+    """Determina los subsets esperados según la configuración del experimento."""
+    target_idx = exp_config.get("target_idx")
+    unified_stim = exp_config.get("unified_stim", False)
+    if target_idx == 1:
+        return ["estimulo_unificado"] if unified_stim else ["vocales", "comandos"]
+    elif target_idx == 0:
+        return ["modalidad"]
+    elif target_idx == 2:
+        return ["artefacto"]
+    return []
+
+def get_class_names(subset_name, n_classes):
+    """Genera nombres de clases dinámicamente según el subset."""
+    if subset_name == "vocales":
+        return ['A', 'E', 'I', 'O', 'U']
+    elif subset_name == "comandos":
+        return ['Arriba', 'Abajo', 'Izquierda', 'Derecha', 'Adelante', 'Atras']
+    elif subset_name == "estimulo_unificado":
+        return ['A', 'E', 'I', 'O', 'U', 'Arriba', 'Abajo', 'Izquierda', 'Derecha', 'Adelante', 'Atras']
+    elif subset_name == "modalidad":
+        return ['Imaginada', 'Pronunciada']
+    elif subset_name == "artefacto":
+        return ['Limpio', 'Parpadeo']
+    else:
+        return [f"Clase {i}" for i in range(n_classes)]
+
 
 
 def find_latest_experiment(root: Path, prefix: str) -> Path:
@@ -167,11 +192,13 @@ def apply_custom_boxplot(ax, data, positions, labels, colors, widths=0.2):
     ax.spines['right'].set_visible(False)
 
 
-def plot_learning_curves(data_vocales, data_comandos, output_path: Path, subject_name: str):
-    fig, axes = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
+def plot_learning_curves(subject_data_dict, output_path: Path, subject_name: str):
+    n_subsets = len(subject_data_dict)
+    fig, axes = plt.subplots(n_subsets, 1, figsize=(10, 6*n_subsets), sharex=True)
+    if n_subsets == 1: axes = [axes]
     
-    for ax, data, subset_name in zip(axes, [data_vocales, data_comandos], ["Vocales", "Comandos"]):
-        if data is None:
+    for ax, (subset_name, data) in zip(axes, subject_data_dict.items()):
+        if not data:
             ax.text(0.5, 0.5, f"No data for {subset_name}", ha='center', va='center')
             ax.axis('off')
             continue
@@ -221,13 +248,13 @@ def plot_learning_curves(data_vocales, data_comandos, output_path: Path, subject
     plt.close(fig)
 
 
-def plot_confusion_matrices(data_vocales, data_comandos, output_path: Path, subject_name: str):
-    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+def plot_confusion_matrices(subject_data_dict, output_path: Path, subject_name: str):
+    n_subsets = len(subject_data_dict)
+    fig, axes = plt.subplots(1, n_subsets, figsize=(10*n_subsets, 6))
+    if n_subsets == 1: axes = [axes]
     
-    for ax, data, subset_name, class_names in zip(
-        axes, [data_vocales, data_comandos], ["Vocales", "Comandos"], [VOCAL_CLASS_NAMES, COMANDO_CLASS_NAMES]
-    ):
-        if data is None or not data["confusion_matrices"]:
+    for ax, (subset_name, data) in zip(axes, subject_data_dict.items()):
+        if not data["confusion_matrices"]:
             ax.text(0.5, 0.5, f"No data for {subset_name}", ha='center', va='center')
             ax.axis('off')
             continue
@@ -237,9 +264,7 @@ def plot_confusion_matrices(data_vocales, data_comandos, output_path: Path, subj
         cm_std = np.nanstd(cm_stack, axis=0)
         
         n = cm_mean.shape[0]
-        # Validar si las clases coinciden (Target IDX podría cambiar esto)
-        if n != len(class_names):
-            class_names = [f"Class {i}" for i in range(n)]
+        class_names = get_class_names(subset_name, n)
 
         annot = np.empty((n, n), dtype=object)
         for r in range(n):
@@ -262,17 +287,21 @@ def plot_confusion_matrices(data_vocales, data_comandos, output_path: Path, subj
     plt.close(fig)
 
 
-def plot_metrics_boxplots(data_vocales, data_comandos, output_path: Path, subject_name: str):
+def plot_metrics_boxplots(subject_data_dict, output_path: Path, subject_name: str):
     fig, ax = plt.subplots(figsize=(10, 6))
     
     all_data, labels, positions, plot_colors = [], [], [], []
     pos = 0
     metric_colors = COLORS[:3] 
     
-    for subset_name, data, n_classes in [("Vocales", data_vocales, 5), ("Comandos", data_comandos, 6)]:
-        if data is None or not data["metrics"]:
+    for subset_name, data in subject_data_dict.items():
+        if not data["metrics"]:
             pos += 4
             continue
+        
+        # Obtener n_classes de metadata o calcular desde métricas
+        n_classes = len(data["metrics"][0]) if data["metrics"] else 2
+        chance = 1.0 / n_classes
         
         metrics_arr = np.array([[m["precision"], m["recall"], m["f1"]] for m in data["metrics"]])
         
@@ -290,23 +319,20 @@ def plot_metrics_boxplots(data_vocales, data_comandos, output_path: Path, subjec
         apply_custom_boxplot(ax, all_data, positions, labels, plot_colors)
         ax.set_ylabel("Score")
         
-        chance_level_vocales = 1.0 / 5  # 0.20
-        chance_level_comandos = 1.0 / 6  # ~0.167
-        
         # Agregar línea de chance para cada subset
-        for subset_name in ["Vocales", "Comandos"]:
-            # Encontrar la posición del primer y último boxplot de ese subset
+        for subset_name, data in subject_data_dict.items():
+            if not data["metrics"]: continue
+            n_classes = len(data["metrics"][0]) if data["metrics"] else 2
+            chance = 1.0 / n_classes
+            # Encontrar posiciones de este subset
             subset_positions = [p for p, l in zip(positions, labels) if l.startswith(subset_name)]
-            if not subset_positions:
-                continue
-            
-            chance = chance_level_vocales if subset_name == "Vocales" else chance_level_comandos
+            if not subset_positions: continue
             ax.axhline(y=chance, color='gray', linestyle=':', linewidth=2, 
                       label=f'{subset_name} Chance (~{chance:.3f})')
 
         min_val = np.nanmin([np.nanmin(d) for d in all_data if d.size > 0])
         max_val = np.nanmax([np.nanmax(d) for d in all_data if d.size > 0])
-        chance_min = min(chance_level_vocales, chance_level_comandos)  # 0.167
+        chance_min = 1.0 / 11  # Usar el menor chance posible (11 clases)
         ax.set_ylim(max(0, min(min_val, chance_min) - 0.05), min(1.0, max(max_val, 0.25) + 0.05))
         ax.set_title(f"Metrics Distribution - {subject_name}", fontweight='bold')
         ax.legend()
@@ -316,10 +342,12 @@ def plot_metrics_boxplots(data_vocales, data_comandos, output_path: Path, subjec
     plt.close(fig)
 
 
-def plot_global_confusion_matrices(all_subjects_data_raw: Dict, output_path: Path):
-    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+def plot_global_confusion_matrices(all_subjects_data_raw: Dict, output_path: Path, subsets: List[str]):
+    n_subsets = len(subsets)
+    fig, axes = plt.subplots(1, n_subsets, figsize=(10*n_subsets, 6))
+    if n_subsets == 1: axes = [axes]
     
-    for ax, subset_name, class_names in zip(axes, SUBSETS, [VOCAL_CLASS_NAMES, COMANDO_CLASS_NAMES]):
+    for ax, subset_name in zip(axes, subsets):
         cm_list = []
         for subj_name, subj_data in all_subjects_data_raw.items():
             if subj_data is None: continue
@@ -339,7 +367,7 @@ def plot_global_confusion_matrices(all_subjects_data_raw: Dict, output_path: Pat
         cm_std = np.nanstd(cm_global_stack, axis=0)
         
         n = cm_mean.shape[0]
-        if n != len(class_names): class_names = [f"C{i}" for i in range(n)]
+        class_names = get_class_names(subset_name, n)
 
         annot = np.empty((n, n), dtype=object)
         for r in range(n):
@@ -359,19 +387,23 @@ def plot_global_confusion_matrices(all_subjects_data_raw: Dict, output_path: Pat
     plt.close(fig)
 
 
-def plot_global_metrics_boxplots(all_subjects_data: Dict, output_path: Path):
+def plot_global_metrics_boxplots(all_subjects_data: Dict, output_path: Path, subsets: List[str]):
     fig, ax = plt.subplots(figsize=(10, 6))
     all_data, labels, positions, plot_colors = [], [], [], []
     pos = 0
 
-    for subset_name in SUBSETS:
+    for subset_name in subsets:
         prec_list, rec_list, f1_list = [], [], []
         for subj_name, subj_data in all_subjects_data.items():
-            s_sum = subj_data["summary"].get(subset_name)
+            s_sum = subj_data.get("summary", {}).get(subset_name)
             if s_sum:
-                if s_sum["precision_mean"]: prec_list.append(s_sum["precision_mean"])
-                if s_sum["recall_mean"]: rec_list.append(s_sum["recall_mean"])
-                if s_sum["f1_mean"]: f1_list.append(s_sum["f1_mean"])
+                if s_sum.get("precision_mean"): prec_list.append(s_sum["precision_mean"])
+                if s_sum.get("recall_mean"): rec_list.append(s_sum["recall_mean"])
+                if s_sum.get("f1_mean"): f1_list.append(s_sum["f1_mean"])
+        
+        # Obtener n_classes para calcular chance
+        n_classes = 11 if subset_name == "estimulo_unificado" else (5 if subset_name == "vocales" else (6 if subset_name == "comandos" else 2))
+        chance = 1.0 / n_classes
         
         for i, (m_data, m_name) in enumerate(zip([prec_list, rec_list, f1_list], METRICS_NAMES)):
             if m_data:
@@ -387,18 +419,18 @@ def plot_global_metrics_boxplots(all_subjects_data: Dict, output_path: Path):
         ax.set_ylabel("Score")
         
         # Agregar línea de chance separada para cada subset
-        for subset_name in SUBSETS:
+        for subset_name in subsets:
             subset_positions = [p for p, l in zip(positions, labels) if l.startswith(subset_name)]
             if not subset_positions:
                 continue
-            
-            chance = 1.0 / 5 if subset_name == "vocales" else 1.0 / 6
+            n_classes = 11 if subset_name == "estimulo_unificado" else (5 if subset_name == "vocales" else (6 if subset_name == "comandos" else 2))
+            chance = 1.0 / n_classes
             ax.axhline(y=chance, color='gray', linestyle=':', linewidth=2, 
                       label=f'{subset_name.capitalize()} Chance (~{chance:.3f})')
         
         min_val = np.nanmin([np.nanmin(d) for d in all_data if len(d) > 0])
         max_val = np.nanmax([np.nanmax(d) for d in all_data if len(d) > 0])
-        chance_min = 1.0 / 6  # Usar el menor chance para el ylim
+        chance_min = 1.0 / 11  # Usar el menor chance posible
         ax.set_ylim(max(0, min(min_val, chance_min) - 0.05), min(1.0, max(max_val, 0.25) + 0.05))
         ax.set_title("Global Metrics Distribution (Across Subjects)", fontweight='bold')
         ax.legend()
@@ -408,20 +440,22 @@ def plot_global_metrics_boxplots(all_subjects_data: Dict, output_path: Path):
     plt.close(fig)
 
 
-def plot_global_precision_by_subject(all_subjects_data: Dict, output_path: Path):
+def plot_global_precision_by_subject(all_subjects_data: Dict, output_path: Path, subsets: List[str]):
     """
     Genera boxplots de precisión por cada sujeto, con promedio entre sujetos a la derecha.
-    Dos subplots: Vocales (arriba) y Comandos (abajo).
+    Subplots dinámicos según los subsets.
     """
-    fig, axes = plt.subplots(2, 1, figsize=(14, 10), sharex=False)
+    n_subsets = len(subsets)
+    fig, axes = plt.subplots(n_subsets, 1, figsize=(14, 5*n_subsets), sharex=False)
+    if n_subsets == 1: axes = [axes]
     
     # Extraer lista de sujetos ordenada
     subject_names = sorted([k for k in all_subjects_data.keys()])
     n_subjects = len(subject_names)
     
-    for ax, subset_name in zip(axes, SUBSETS):
+    for ax, subset_name in zip(axes, subsets):
         # Recolectar precisión de cada pliegue para cada sujeto
-        all_precision_per_subject = []  # Lista de listas: [ [prec_fold1, fold2, ...], ... ]
+        all_precision_per_subject = [] # Lista de listas: [ [prec_fold1, fold2, ...], ... ]
         
         for subj_name in subject_names:
             subj_data = all_subjects_data.get(subj_name)
@@ -438,9 +472,9 @@ def plot_global_precision_by_subject(all_subjects_data: Dict, output_path: Path)
             precisions = [m["precision"] for m in subset_data["metrics"] if "precision" in m]
             all_precision_per_subject.append(precisions)
         
-        # Crear posiciones para boxplots: 15 sujetos + 1 para promedio
-        positions = list(range(n_subjects))  # 0-14
-        avg_position = n_subjects + 0.5  # Separado a la derecha
+        # Crear posiciones para boxplots: n sujetos + 1 para promedio
+        positions = list(range(n_subjects))
+        avg_position = n_subjects + 0.5
         
         # Calcular promedio por sujeto (media de precisiones de todos los folds)
         subject_means = []
@@ -461,7 +495,6 @@ def plot_global_precision_by_subject(all_subjects_data: Dict, output_path: Path)
             if prec_list:
                 box_data.append(prec_list)
                 box_positions.append(positions[i])
-                # Puntos con jitter
                 jitter_data.extend(prec_list)
                 jitter_positions.extend([positions[i]] * len(prec_list))
         
@@ -475,7 +508,6 @@ def plot_global_precision_by_subject(all_subjects_data: Dict, output_path: Path)
         
         # Graficar
         if box_data:
-            # Boxplots
             bp = ax.boxplot(box_data, positions=box_positions, widths=0.3,
                            showfliers=False, manage_ticks=False,
                            patch_artist=True,
@@ -484,7 +516,6 @@ def plot_global_precision_by_subject(all_subjects_data: Dict, output_path: Path)
                            capprops=dict(color="#264653", alpha=0.7),
                            boxprops=dict(facecolor="#2a9d8f", color="#264653", alpha=0.5))
             
-            # Scatter points con jitter
             jitter = np.random.normal(0, 0.04, size=len(jitter_data))
             ax.scatter(jitter_positions, jitter_data, color="#264653", alpha=0.6, s=30, 
                       edgecolors='white', linewidths=0.5, zorder=3)
@@ -495,8 +526,9 @@ def plot_global_precision_by_subject(all_subjects_data: Dict, output_path: Path)
         ax.set_xticks(all_x)
         ax.set_xticklabels(subject_labels, rotation=45, ha='right', fontsize=8)
         
-        # Línea de chance
-        chance = 1.0 / 5 if subset_name == "vocales" else 1.0 / 6
+        # Línea de chance dinámica
+        n_classes = 11 if subset_name == "estimulo_unificado" else (5 if subset_name == "vocales" else (6 if subset_name == "comandos" else 2))
+        chance = 1.0 / n_classes
         ax.axhline(y=chance, color='red', linestyle='--', linewidth=2, 
                   label=f'Chance (~{chance:.3f})')
         
@@ -505,7 +537,6 @@ def plot_global_precision_by_subject(all_subjects_data: Dict, output_path: Path)
         ax.legend(loc='upper right')
         ax.grid(axis='y', linestyle='--', alpha=0.3)
         
-        # Ajustar ylim
         y_min = max(0, min(chance - 0.05, np.nanmin(jitter_data) if jitter_data else 0))
         y_max = min(1.0, max(chance + 0.15, np.nanmax(jitter_data) if jitter_data else 0.2))
         ax.set_ylim(y_min, y_max)
@@ -517,27 +548,32 @@ def plot_global_precision_by_subject(all_subjects_data: Dict, output_path: Path)
     plt.close(fig)
 
 
-def process_subject(subject_dir: Path, output_root: Path):
+def process_subject(subject_dir: Path, output_root: Path, subsets: List[str]):
     subject_name = subject_dir.name
     print(f"\n[Visualizer] Processing subject: {subject_name}")
     
     subject_out = output_root / subject_name
     subject_out.mkdir(parents=True, exist_ok=True)
     
-    data_vocales = collect_fold_data(subject_dir, "vocales")
-    data_comandos = collect_fold_data(subject_dir, "comandos")
+    # Recolectar datos para todos los subsets esperados
+    subject_data = {}
+    for subset in subsets:
+        data = collect_fold_data(subject_dir, subset)
+        if data:
+            subject_data[subset] = data
     
-    if data_vocales is None and data_comandos is None:
+    if not subject_data:
         print(f"  No data found for {subject_name}, skipping...")
         return None
     
-    plot_learning_curves(data_vocales, data_comandos, subject_out / "learning_curves.png", subject_name)
-    plot_confusion_matrices(data_vocales, data_comandos, subject_out / "confusion_matrices.png", subject_name)
-    plot_metrics_boxplots(data_vocales, data_comandos, subject_out / "metrics_boxplots.png", subject_name)
+    plot_learning_curves(subject_data, subject_out / "learning_curves.png", subject_name)
+    plot_confusion_matrices(subject_data, subject_out / "confusion_matrices.png", subject_name)
+    plot_metrics_boxplots(subject_data, subject_out / "metrics_boxplots.png", subject_name)
     
+    # Resumen dinámico
     summary = {}
-    for subset_name, data in [("vocales", data_vocales), ("comandos", data_comandos)]:
-        if data is None or not data["metrics"]: continue
+    for subset_name, data in subject_data.items():
+        if not data["metrics"]: continue
         
         metrics_arr = np.array([[m["precision"], m["recall"], m["f1"]] for m in data["metrics"]])
         
@@ -552,12 +588,18 @@ def process_subject(subject_dir: Path, output_root: Path):
         }
     
     save_json_safe(subject_out / "summary.json", summary)
-    return {"vocales": data_vocales, "comandos": data_comandos, "summary": summary}
+    return subject_data
 
 # ==================== MAIN ====================
 if __name__ == "__main__":
     EXP_ROOT = find_latest_experiment(EXPERIMENTS_ROOT, EXPERIMENT_NAME_PREFIX)
     print(f"[Visualizer] Using experiment root: {EXP_ROOT}")
+    
+    exp_config = load_json_safe(EXP_ROOT / "experiment_config.json")
+    if exp_config is None:
+        raise ValueError("No se encontró experiment_config.json en el experimento")
+    expected_subsets = get_expected_subsets(exp_config)
+    print(f"[Visualizer] Expected subsets: {expected_subsets}")
     
     OUTPUT_ROOT = EXP_ROOT / OUTPUT_SUBDIR
     OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
@@ -566,7 +608,7 @@ if __name__ == "__main__":
     
     all_subjects_data = {}
     for subject_dir in subject_dirs:
-        data = process_subject(subject_dir, OUTPUT_ROOT)
+        data = process_subject(subject_dir, OUTPUT_ROOT, expected_subsets)
         if data is not None:
             all_subjects_data[subject_dir.name] = data
     
@@ -574,12 +616,14 @@ if __name__ == "__main__":
     global_out = OUTPUT_ROOT / "global"
     global_out.mkdir(parents=True, exist_ok=True)
     
-    plot_global_metrics_boxplots(all_subjects_data, global_out / "metrics_boxplots_global.png")
-    plot_global_confusion_matrices(all_subjects_data, global_out / "confusion_matrices_global.png")
-    plot_global_precision_by_subject(all_subjects_data, global_out / "precision_by_subject_global.png")
+    plot_global_metrics_boxplots(all_subjects_data, global_out / "metrics_boxplots_global.png", expected_subsets)
+    plot_global_confusion_matrices(all_subjects_data, global_out / "confusion_matrices_global.png", expected_subsets)
+    plot_global_precision_by_subject(all_subjects_data, global_out / "precision_by_subject_global.png", expected_subsets)
     
     global_summary = {
         "experiment_root": str(EXP_ROOT),
+        "target_idx": exp_config.get("target_idx"),
+        "unified_stim": exp_config.get("unified_stim", False),
         "n_subjects": len(all_subjects_data),
         "subjects": list(all_subjects_data.keys())
     }

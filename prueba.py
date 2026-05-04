@@ -1708,3 +1708,154 @@ plt.xlabel('Frecuencia (Hz)')
 plt.xlim(0, fs/2)
 plt.tight_layout()
 plt.show()
+
+########################################################################
+import numpy as np
+import matplotlib.pyplot as plt
+
+# cargo este archivo
+ruta="data/original_reshaped/S14_EEG.npz"
+data=np.load(ruta)
+
+x=data['x']
+y=data['y']
+
+x_sin_parpadeo=x[y[:,2]==1]
+x_con_parpadeo=x[y[:,2]==2]
+x_sin_pron=x[y[:,0]==1]
+x_con_pron=x[y[:,0]==2]
+x_sin_parpadeo_sin_pronunciacion=x[(y[:,2]==1)*(y[:,0]==1)]
+x_sin_parpadeo_con_pronunciacion=x[(y[:,2]==1)*(y[:,0]==2)]
+x_con_parpadeo_sin_pronunciacion=x[(y[:,2]==2)*(y[:,0]==1)]
+x_con_parpadeo_con_pronunciacion=x[(y[:,2]==2)*(y[:,0]==2)]
+
+xx=[x_sin_parpadeo,x_con_parpadeo,x_sin_pron,x_con_pron]
+titulos=['Sin parpadeo','Con parpadeo','Sin pronunciacion','Con pronunciacion']
+N = 12
+plt.figure(figsize=(18,9))
+for i in range(N*4):
+    plt.subplot(N,4,i+1)
+    if i//4==0:
+        plt.title(titulos[i%4])
+    plt.plot(xx[i%4][i//4,0,:])
+    plt.ylim(-150,80)
+    plt.yticks([])
+    if i//4<(N-1):
+        plt.xticks([])
+plt.tight_layout()
+plt.show()
+
+xx=[x_sin_parpadeo_sin_pronunciacion,
+    x_sin_parpadeo_con_pronunciacion,
+    x_con_parpadeo_sin_pronunciacion,
+    x_con_parpadeo_con_pronunciacion]
+titulos=['Sin parpadeo - Sin pronunciacion',
+         'Sin parpadeo - Con pronunciacion',
+         'Con parpadeo - Sin pronunciacion',
+         'Con parpadeo - Con pronunciacion']
+
+plt.figure(figsize=(14,8))
+for i in range(N*4):
+    plt.subplot(N,4,i+1)
+    if i//4==0:
+        plt.title(titulos[i%4])
+    plt.plot(xx[i%4][i//4,0,:])
+    plt.ylim(-150,80)
+    plt.yticks([])
+    if i//4<(N-1):
+        plt.xticks([])
+plt.tight_layout()
+plt.show()
+
+# vector de promedio de todas las combinaciones
+proms = [np.mean(x, axis=0), np.mean(x_sin_parpadeo, axis=0),
+         np.mean(x_con_parpadeo, axis=0), np.mean(x_sin_pron, axis=0),
+         np.mean(x_sin_parpadeo_sin_pronunciacion, axis=0),
+         np.mean(x_con_parpadeo_sin_pronunciacion, axis=0),
+         np.mean(x_con_pron, axis=0),
+         np.mean(x_sin_parpadeo_con_pronunciacion, axis=0),
+         np.mean(x_con_parpadeo_con_pronunciacion, axis=0)]
+desv = [np.std(x, axis=0), np.std(x_sin_parpadeo, axis=0),
+         np.std(x_con_parpadeo, axis=0), np.std(x_sin_pron, axis=0),
+         np.std(x_sin_parpadeo_sin_pronunciacion, axis=0),
+         np.std(x_con_parpadeo_sin_pronunciacion, axis=0),
+         np.std(x_con_pron, axis=0),
+         np.std(x_sin_parpadeo_con_pronunciacion, axis=0),
+         np.std(x_con_parpadeo_con_pronunciacion, axis=0)]
+titulos = ['Promedio Total', 'Sin parpadeo', 
+         'Con parpadeo', 'Sin pronunciacion', 
+         'Sin parpadeo - Sin pronunciacion',
+         'Con parpadeo - Sin pronunciacion',
+         'Con pronunciacion',
+         'Sin parpadeo - Con pronunciacion',
+         'Con parpadeo - Con pronunciacion']
+
+plt.figure(figsize=(16, 8))
+for i in range(len(proms)):
+    plt.subplot(3, 3, i+1)
+    plt.plot(proms[i][0, :], label='Promedio')
+    plt.fill_between(range(proms[i].shape[1]), 
+                     proms[i][0, :] - desv[i][0, :], 
+                     proms[i][0, :] + desv[i][0, :], 
+                     alpha=0.2, label='Desv. Est.')
+    plt.title(titulos[i])
+    plt.ylim(-30, 30)
+    if i < 6: plt.xticks([])
+plt.tight_layout()
+plt.show()
+
+canal = 4
+prom = []
+desv = []
+for i in range(11):
+    prom.append(np.mean(x[(y[:,2]==1)*(y[:,0]==1)*(y[:,1] == (i+1)),canal,:], axis=0))
+    desv.append(np.std(x[(y[:,2]==1)*(y[:,0]==1)*(y[:,1] == (i+1)),canal,:], axis=0))
+prom = prom[:5] + [np.zeros_like(prom[0])] + prom[5:]
+desv = desv[:5] + [np.zeros_like(desv[0])] + desv[5:]
+titulos = ['A','E','I','O','U','',
+           'Arriba', 'Abajo',
+           'Izquierda', 'Derecha',
+           'Adelante','Atras']
+# grafico
+plt.figure(figsize=(19, 6))
+for i in range(12):
+    plt.subplot(2, 6, i+1)
+    plt.plot(prom[i], label='Promedio')
+    plt.fill_between(range(prom[i].shape[0]), 
+                    prom[i] - desv[i], 
+                    prom[i] + desv[i], 
+                    alpha=0.2, label='Desv. Est.')
+    plt.title(titulos[i])
+    plt.ylim(-30, 30)
+    if i < 6:
+        plt.xticks([])
+plt.tight_layout()
+plt.show()
+
+# hago lo mismo pero promediando todas las vocales por un lado
+# y todos los comandos por otro
+canal = 4
+prom_vowels = np.mean(x[(y[:,1] <= 5),canal,:], axis=0)
+desv_vowels = np.std(x[(y[:,1] <= 5),canal,:], axis=0)
+prom_commands = np.mean(x[(y[:,1] > 5),canal,:], axis=0)
+desv_commands = np.std(x[(y[:,1] > 5),canal,:], axis=0)
+
+plt.figure(figsize=(10, 6))
+plt.subplot(2, 1, 1)
+plt.plot(prom_vowels, label='Promedio Vocales')
+plt.fill_between(range(len(prom_vowels)), 
+                 prom_vowels - desv_vowels, 
+                 prom_vowels + desv_vowels, 
+                 alpha=0.2, color='blue')
+plt.title('Promedio de todas las Vocales (P3)')
+plt.ylim(-30, 30)
+plt.subplot(2, 1, 2)
+plt.plot(prom_commands, label='Promedio Comandos', color='orange')
+plt.fill_between(range(len(prom_commands)), 
+                 prom_commands - desv_commands, 
+                 prom_commands + desv_commands, 
+                 alpha=0.2, color='orange')
+plt.title('Promedio de todos los Comandos (P3)')
+plt.ylim(-30, 30)
+plt.tight_layout()
+plt.show()

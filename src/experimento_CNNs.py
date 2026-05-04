@@ -18,6 +18,7 @@ import json
 import traceback
 import random
 import re
+import argparse
 from pathlib import Path
 from pprint import pprint
 import platform
@@ -29,6 +30,7 @@ import torch.nn as nn
 import torch.optim as optim
 from sklearn.model_selection import StratifiedKFold, train_test_split
 from sklearn.metrics import confusion_matrix, classification_report, accuracy_score
+from sklearn.utils.class_weight import compute_class_weight
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
@@ -40,17 +42,42 @@ from models import EEGNet, ShallowConvNet, DeepConvNet, iSpeechCNN
 # -----------------------------
 # CONFIGURACIÓN (modificar aquí)
 # -----------------------------
-DATA_DIR = Path(__file__).resolve().parents[1] / "data" / "clean_1024hz"
+DATA_DIR = Path(__file__).resolve().parents[1] / "data" / "clean_preprocessed"
 EXPERIMENTS_ROOT = Path(__file__).resolve().parents[1] / "experiments"
-EXPERIMENT_NAME = "1024_clean_EEGNet"
-SUFIJO_DATOS = '_clean_1024'
+EXPERIMENT_NAME = "128_splited_EEGNet_segmented"
+
+# Parseo de argumentos CLI
+parser = argparse.ArgumentParser(description='EEG Experiment Runner')
+parser.add_argument('--trial-segment', type=float, nargs=2, 
+                    help='Segmento temporal (inicio fin) en segundos, ej: 0.0 0.5')
+parser.add_argument('--experiment-name', type=str, default=None,
+                    help='Nombre del experimento (sobrescribe EXPERIMENT_NAME)')
+parser.add_argument('--window-duration', type=float, default=None,
+                    help='Duración de la ventana en segundos')
+parser.add_argument('--window-shift', type=float, default=None,
+                    help='Desplazamiento de la ventana en segundos')
+args = parser.parse_args()
+
+if args.experiment_name:
+    EXPERIMENT_NAME = args.experiment_name
+
+SUFIJO_DATOS = '_clean'
 NOMBRE_ARRAY_DATOS, NOMBRE_ARRAY_ETIQUETAS = "x", "y"
 N_CHANNELS = 6
-FS = 1024  # Frecuencia de muestreo de los datos (Hz)
+FS = 128  # Frecuencia de muestreo de los datos (Hz)
+
+# Segmento temporal del trial a utilizar (en segundos)
+# Formato: (inicio, fin) donde None significa "desde el inicio" o "hasta el final"
+# Ejemplos:
+#   (None, None)  → Trial completo (0 a 4s)
+#   (1.0, None)   → Desde el segundo 1 hasta el final (salta el primer segundo)
+#   (None, 3.0)   → Desde el inicio hasta el segundo 3 (usa solo los primeros 3s)
+#   (1.0, 3.0)   → Desde el segundo 1 hasta el 3 (ventana de 2s en medio)
+TRIAL_SEGMENT = tuple(args.trial_segment) if args.trial_segment else (None, None)
 
 # TARGET SELECTION (0: Modalidad, 1: Estímulo, 2: Artefacto)
 TARGET_IDX = 1
-UNIFIED_STIM = True  # Solo aplica si TARGET_IDX == 1: True = 11 clases de estímulo (sin split vocales/comandos)
+UNIFIED_STIM = False  # Solo aplica si TARGET_IDX == 1: True = 11 clases de estímulo (sin split vocales/comandos)
 
 # experiment control
 MASTER_SEED = 17    # setea a None si no querés seed maestro
@@ -76,6 +103,8 @@ SHUFFLE_TRAIN = True
 SAVE_TRAIN_INDEX = True
 SAVE_BEST_MODEL = False
 
+USE_CLASS_WEIGHT = True  # True = enable balanced class weights in CrossEntropyLoss
+
 # -----------------------------
 # MODEL selection block
 # -----------------------------
@@ -84,7 +113,7 @@ MODEL_NAME = "EEGNet"
 if MODEL_NAME == "EEGNet":
     MODEL_CLASS = EEGNet
     MODEL_KWARGS = dict(
-            F1=8, D=2, F2=None, kernel_length=64, separable_kernel_length=16,
+            F1=8, D=2, F2=None, kernel_length=FS//2, separable_kernel_length=16,
             pool_time1=4, pool_time2=8, dropout_prob=DROPOUT, hidden_units=None,
             max_norm_spatial=1.0, max_norm_dense=0.25
             )
@@ -116,8 +145,8 @@ OPTIMIZER_KWARGS = dict(lr=LR,
 # Augmentation defaults
 # -----------------------------
 AUGMENT_KWARGS = dict(
-    window_duration=4.0,
-    window_shift=4.0,
+    window_duration=args.window_duration if args.window_duration else 1.0,
+    window_shift=args.window_shift if args.window_shift else 0.5,
     fs=FS,
     band_noise_factor_train=0.0, # Ajusta tu probabilidad real aquí (ej. 0.3)
     fts_factor_train=0.0,        # Ajusta tu probabilidad real aquí (ej. 0.3)
@@ -188,14 +217,16 @@ def save_experiment_config(exp_root: Path, master_seed, seeds_list):
         "hostname": platform.node(),
         "model_name": MODEL_NAME,
         "model_kwargs": MODEL_KWARGS,
-        "optimizer_kwargs": OPTIMIZER_KWARGS
+        "optimizer_kwargs": OPTIMIZER_KWARGS,
+        "use_class_weight": USE_CLASS_WEIGHT
     }
     save_json(exp_root / "experiment_config.json", config)
 
-def compute_zscore_params(X_train):
-    """Media y std aislada POR CANAL."""
-    mean = np.mean(X_train, axis=(0, 2), keepdims=True)
-    std = np.std(X_train, axis=(0, 2), keepdims=True)
+def compute_zscore_params(X_train, start_idx=0, end_idx=None):
+    """Media y std aislada POR CANAL, calculada solo en el segmento útil."""
+    X_focus = X_train[:, :, start_idx:end_idx]
+    mean = np.mean(X_focus, axis=(0, 2), keepdims=True)
+    std = np.std(X_focus, axis=(0, 2), keepdims=True)
     std[std < 1e-8] = 1e-8
     return mean, std
 
@@ -386,8 +417,13 @@ if __name__ == '__main__':
                             Y_train_trials = Y_train_all
                             X_val_trials, Y_val_trials = None, None
 
-                        # 2. Normalización Z-Score Aislada por Canal
-                        mean_val, std_val = compute_zscore_params(X_train_trials)
+                        # Traducir TRIAL_SEGMENT (segundos) a índices (muestras)
+                        z_start = 0 if TRIAL_SEGMENT[0] is None else int(TRIAL_SEGMENT[0] * FS)
+                        z_end = X_train_trials.shape[2] if TRIAL_SEGMENT[1] is None else int(TRIAL_SEGMENT[1] * FS)
+
+                        # 2. Normalización Z-Score Aislada por Canal (sobre el segmento limpio)
+                        mean_val, std_val = compute_zscore_params(X_train_trials, start_idx=z_start, end_idx=z_end)
+
                         X_train_trials = apply_zscore(X_train_trials, mean_val, std_val)
                         if X_val_trials is not None:
                             X_val_trials = apply_zscore(X_val_trials, mean_val, std_val)
@@ -401,6 +437,7 @@ if __name__ == '__main__':
                             X_train_trials, Y_train_trials, fs=AUGMENT_KWARGS['fs'],
                             window_duration=AUGMENT_KWARGS['window_duration'], 
                             window_shift=AUGMENT_KWARGS['window_shift'],
+                            trial_segment=TRIAL_SEGMENT,  # NUEVO
                             modo='train',
                             band_noise_factor=AUGMENT_KWARGS['band_noise_factor_train'],
                             fts_factor=AUGMENT_KWARGS['fts_factor_train'],
@@ -412,6 +449,7 @@ if __name__ == '__main__':
                             X_test_trials, Y_test_trials, fs=AUGMENT_KWARGS['fs'],
                             window_duration=AUGMENT_KWARGS['window_duration'], 
                             window_shift=AUGMENT_KWARGS['window_shift'],
+                            trial_segment=TRIAL_SEGMENT,  # NUEVO
                             modo='test' 
                         )
 
@@ -462,7 +500,17 @@ if __name__ == '__main__':
                         
                         model = model.to(device)
                         optimizer = optim.Adam(model.parameters(), **OPTIMIZER_KWARGS)
-                        loss_fn = nn.CrossEntropyLoss()
+                        if USE_CLASS_WEIGHT:
+                            y_train = Y_train_trials[:, TARGET_IDX].astype(int)
+                            unique_classes = np.unique(y_train)
+                            class_weights = compute_class_weight(class_weight='balanced', classes=unique_classes, y=y_train)
+                            full_weights = np.ones(n_classes_target, dtype=np.float32)
+                            for cls, w in zip(unique_classes, class_weights):
+                                full_weights[cls] = w
+                            weight_tensor = torch.tensor(full_weights, dtype=torch.float32, device=device)
+                            loss_fn = nn.CrossEntropyLoss(weight=weight_tensor)
+                        else:
+                            loss_fn = nn.CrossEntropyLoss()
 
                         model_output_path = str(fold_out / "best_model.pth") if SAVE_BEST_MODEL else None
 

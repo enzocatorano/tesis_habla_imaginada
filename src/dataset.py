@@ -8,15 +8,15 @@ class OnlineEEGDataset(Dataset):
     def __init__(self, 
                  X_trials, 
                  Y_trials, 
-                 fs=128,
+                 fs=1024,
                  window_duration=1.5, 
                  window_shift=0.5,
+                 trial_segment=(None, None),  # NUEVO: (inicio, fin) en segundos
                  modo='train',
                  band_noise_factor=0.0,
                  fts_factor=0.0,
                  noise_magnitude_relative=0.025,
-                 seed=None):
-        
+                 seed=None):        
         # 1. OPTIMIZACIÓN CRÍTICA: Convertir a Tensores de PyTorch INMEDIATAMENTE.
         # Esto habilita el uso de Memoria Compartida (Shared Memory) entre workers,
         # evitando que Windows haga copias masivas de memoria.
@@ -29,11 +29,33 @@ class OnlineEEGDataset(Dataset):
         self.duration_samples = int(window_duration * fs)
         self.shift_samples = int(window_shift * fs)
         
+        # NUEVO: Calcular límites del segmento a usar
+        seg_inicio, seg_fin = trial_segment
+        self.start_sample = 0 if seg_inicio is None else int(seg_inicio * fs)
+        self.end_sample = self.X.shape[2] if seg_fin is None else int(seg_fin * fs)
+        
+        # Validar límites
+        if self.start_sample < 0: self.start_sample = 0
+        if self.end_sample > self.X.shape[2]: self.end_sample = self.X.shape[2]
+        if self.start_sample >= self.end_sample:
+            raise ValueError(f"Segmento inválido: inicio={self.start_sample}, fin={self.end_sample}")
+        
+        # Duración efectiva para el cálculo de ventanas
+        effective_samples = self.end_sample - self.start_sample
+        
+        if effective_samples <= 0:
+            raise ValueError("El segmento seleccionado no contiene muestras.")
+        
         n_timepoints = self.X.shape[2]
-        self.n_windows_per_trial = int((n_timepoints - self.duration_samples) / self.shift_samples) + 1
+        # MODIFICADO: Calcular ventanas basado en effective_samples
+        self.n_windows_per_trial = int((effective_samples - self.duration_samples) / self.shift_samples) + 1
         
         if self.n_windows_per_trial <= 0:
-             raise ValueError("La duración de la ventana es mayor que el tamaño del trial.")
+             raise ValueError(
+                 f"window_duration ({self.duration_samples/self.fs:.1f}s) "
+                 f"es más largo que el segmento ({effective_samples/self.fs:.1f}s). "
+                 f"Ajusta window_duration a {effective_samples/self.fs:.1f}s o menor."
+             )
         
         self.n_trials = self.X.shape[0]
         self.total_windows = self.n_trials * self.n_windows_per_trial
@@ -99,8 +121,14 @@ class OnlineEEGDataset(Dataset):
         trial_idx = idx // self.n_windows_per_trial
         window_idx = idx % self.n_windows_per_trial
         
-        start_sample = window_idx * self.shift_samples
+        start_sample = self.start_sample + (window_idx * self.shift_samples)
         end_sample = start_sample + self.duration_samples
+        
+        # Validar que no nos pasemos del final del segmento
+        # Reemplazar el ValueError por un ajuste silencioso y seguro
+        if end_sample > self.end_sample:
+            end_sample = self.end_sample
+            start_sample = end_sample - self.duration_samples
         
         # Extracción ultrarrápida usando slicing de tensores
         x_tensor = self.X[trial_idx, :, start_sample:end_sample].clone()

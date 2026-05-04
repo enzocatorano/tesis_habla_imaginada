@@ -154,3 +154,53 @@ RESUMEN:
 - Resultados consistentes con chance (modelo no generaliza bien)
 - Listos para probar augmentación u otros modelos
 ================================================================================
+
+================================================================================
+Fecha: 2026-05-01
+================================================================================
+Vimos los resultados alcanzados por Deepak en su baseline con EEGNet y nos
+llamó la atención que lograra precisiones estadísticamente superiores al nivel
+de chance con un modelo que a nosotros no nos había funcionado. Al haber
+trabajado él con las 11 clases al mismo tiempo, sospeché de un comportamiento
+exclusivo de esa configuración.
+Corriendo experimentos con las 11 clases, y separando vocales de comandos, asi
+como con los datos limpios (solo imaginada sin parpadeos) y completos,
+encontramos que la red se vuelve particularmente buena en distinguir que es
+un comando y que una vocal, aunque no pueda distinguir dentro de cada grupo.
+Así, la red mejoraba significativamente la performance de 1/11 pero no por
+decodificar correctamente, si por simplemente distinguir grupos.
+Esto llevó a analizar los por que de tal facilidad. Los pitidos que indicaban
+el momento a imaginar el comando, hicieron sospechar que podrían haberse
+codificado en el eeg de alguna manera. Se sospecho entonces de los potenciales
+evocados.
+Promediando las señales temporales, se encontraron diferencias sustanciales
+entre los comandos y las vocales. Diferencias que, se hipotetizan, llevarían a
+que la red aprenda con relativa facilidad a distinguir los grupos.
+
+Tras esto, se implementó lanzador_ventanas_temporales.py, que permite correr
+experimentos enmascarando los trials a secciones temporales especificas, e ir
+desplazando la ventana entre cada experimento. Esto con el objetivo de ver si
+existen diferencias de performances en diferentes secciones del tiempo. Sabiendo
+que algunas de ellos deberían no servir para clasificar el habla imaginada (como
+el VEP al comienzo de las señales). Este experimento se hizo con la totalidad de
+los datos, lo que se sospecha que puede ser un problema, ya que la red podría,
+quizá, aprender a distinguir pronunciaciones en el ruido miografico de aquellos
+trials que están marcados con modalidad de pronunciación. Sin embargo, el
+análisis de los experimentos anteriores (EEGNet con vocales y comandos por
+separado) muestran que podría llegar a haber diferencia. Queda a discutirse.
+================================================================================
+
+================================================================================
+Fecha: 2026-05-03
+================================================================================
+Encontramos que no hay diferencias con el nivel de chance en la precision de
+clasificación entre las diferentes ventanas temporales especificadas en el
+experimento anterior, al menos no de manera universal (entre todos los sujeto de
+manera compartida).
+Ahora dejamos corriendo un experimento aun con EEGNet pero segmentando los trial
+en ventanas de 1 segundo con 0.5s de stride. Pero a diferencia del experimento
+anterior, aca usamos todos los segmentos temporales de un mismo trial para
+entrenar, es decir, es un único experimento integrando todos los segementos
+temporales. Mera data-augmentation. Usando también solo los datos limpios, sin
+parpadeos ni pronunciaciones.
+================================================================================

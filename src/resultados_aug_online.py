@@ -21,7 +21,7 @@ from typing import List, Dict, Tuple
 
 # ---------------- CONFIG ----------------
 EXPERIMENTS_ROOT = Path(__file__).resolve().parents[1] / "experiments"
-EXPERIMENT_NAME_PREFIX = "128_splited_EEGNet_segmented_20260503-073226_CatoranoBrothers"
+EXPERIMENT_NAME_PREFIX = "128_splited_EEGNet_segmented_balanced_20260504-034947_CatoranoBrothers"
 OUTPUT_SUBDIR = "visualization_results"
 
 METRICS_NAMES = ["Precision", "Recall", "F1-Score"]
@@ -659,23 +659,3 @@ if __name__ == "__main__":
     
     print(f"\n[Visualizer] Done! Results saved to: {OUTPUT_ROOT}")
 
-########################################################################
-########################################################################
-########################################################################
-
-import numpy as np
-ruta = 'data/clean_preprocessed/S'
-for i in range(15):
-    if i < 9:
-        aux = ruta + f'0{i+1}_clean.npz'
-    else:
-        aux = ruta + f'{i+1}_clean.npz'
-    data = np.load(aux)
-    # quiero contar la cantidad de etiquetas de
-    # estimulo que hay de cada tipo y[:,1]
-    counts = np.zeros(11)
-    y = data['y'][:,1]
-    for label in range(1, 12):
-        counts[label-1] = np.sum(y == label)
-    print(f"Sujeto {i+1}: {counts}")
-    

@@ -44,7 +44,7 @@ from models import EEGNet, ShallowConvNet, DeepConvNet, iSpeechCNN
 # -----------------------------
 DATA_DIR = Path(__file__).resolve().parents[1] / "data" / "clean_preprocessed"
 EXPERIMENTS_ROOT = Path(__file__).resolve().parents[1] / "experiments"
-EXPERIMENT_NAME = "128_splited_EEGNet_segmented"
+EXPERIMENT_NAME = "128_splited_DeepCN_segmented"
 
 # Parseo de argumentos CLI
 parser = argparse.ArgumentParser(description='EEG Experiment Runner')
@@ -91,7 +91,7 @@ VAL_FRAC = 0.2
 BATCH_SIZE = 16
 EPOCHS = 50
 LR = 1e-3
-PATIENCE = 50
+PATIENCE = 20
 DROPOUT = 0.5
 HIDDEN_UNITS = None
 
@@ -108,7 +108,7 @@ USE_CLASS_WEIGHT = True  # True = enable balanced class weights in CrossEntropyL
 # -----------------------------
 # MODEL selection block
 # -----------------------------
-MODEL_NAME = "EEGNet"
+MODEL_NAME = "DeepConvNet"
 
 if MODEL_NAME == "EEGNet":
     MODEL_CLASS = EEGNet
@@ -125,7 +125,7 @@ elif MODEL_NAME == "ShallowConvNet":
             )
 elif MODEL_NAME == "DeepConvNet":
     MODEL_CLASS = DeepConvNet
-    MODEL_KWARGS = dict(dropout=DROPOUT)
+    MODEL_KWARGS = dict(dropout=DROPOUT, kernel_size_bloques=5)
 elif MODEL_NAME == "iSpeechCNN":
     MODEL_CLASS = iSpeechCNN
     MODEL_KWARGS = dict(F1=20, dropout_iSpeech=DROPOUT)

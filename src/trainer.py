@@ -64,7 +64,7 @@ class Entrenador:
         perdida_total = 0.0
         n_samples = 0
         
-        for x, y_full in tqdm(cargador_entrenamiento, desc=f"Epoca {epoca} Entrenamiento", position=1, leave=True):
+        for x, y_full in tqdm(cargador_entrenamiento, desc=f"Epoca {epoca} Entrenamiento", position=1, leave=False):
             x = x.to(self.device)
             # Extracción dinámica del objetivo según target_idx
             y_target = y_full[:, self.target_idx].to(self.device)
@@ -93,7 +93,7 @@ class Entrenador:
         n_samples = 0
         
         with torch.no_grad():
-            for x, y_full in tqdm(cargador_validacion, desc=f"Epoca {epoca} Validacion", position=1, leave=True):
+            for x, y_full in tqdm(cargador_validacion, desc=f"Epoca {epoca} Validacion", position=1, leave=False):
                 x = x.to(self.device)
                 y_target = y_full[:, self.target_idx].to(self.device)
                 

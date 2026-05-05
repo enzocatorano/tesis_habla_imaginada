@@ -349,7 +349,8 @@ class DeepConvNet(nn.Module):
                  n_canales: int,
                  n_clases: int,
                  n_samples: int = 512,
-                 dropout: float = 0.5):
+                 dropout: float = 0.5,
+                 kernel_size_bloques: int = 10):
          
         super().__init__()
 
@@ -363,16 +364,16 @@ class DeepConvNet(nn.Module):
             nn.Dropout(dropout)
         )
         # Bloques Profundos (Cooney usa 3 bloques idénticos)
-        self.bloque2 = self._make_block(15, 30, dropout)
-        self.bloque3 = self._make_block(30, 60, dropout)
-        self.bloque4 = self._make_block(60, 120, dropout)
+        self.bloque2 = self._make_block(15, 30, dropout, kernel_size_bloques)
+        self.bloque3 = self._make_block(30, 60, dropout, kernel_size_bloques)
+        self.bloque4 = self._make_block(60, 120, dropout, kernel_size_bloques)
 
         out_dim = self._get_final_flattened_size(n_canales, n_samples)
         self.clasificador = nn.Linear(out_dim, n_clases)
 
-    def _make_block(self, in_f, out_f, drop):
+    def _make_block(self, in_f, out_f, drop, kernel_size=10):
         return nn.Sequential(
-            nn.Conv2d(in_f, out_f, kernel_size=(1, 10), bias=False),
+            nn.Conv2d(in_f, out_f, kernel_size=(1, kernel_size), bias=False),
             nn.BatchNorm2d(out_f),
             nn.ELU(),
             nn.MaxPool2d(kernel_size=(1, 2), stride=(1, 2)),

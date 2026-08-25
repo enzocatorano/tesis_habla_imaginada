@@ -204,3 +204,57 @@ entrenar, es decir, es un único experimento integrando todos los segementos
 temporales. Mera data-augmentation. Usando también solo los datos limpios, sin
 parpadeos ni pronunciaciones.
 ================================================================================
+
+================================================================================
+Fecha: 2026-05-25
+================================================================================
+TRABAJO REALIZADO:
+
+1. ANÁLISIS DE SCRIPTS EXISTENTES PARA TRANSFER LEARNING:
+   - Se examinó experimento_CNNs.py, dataset.py, trainer.py, models.py
+   - Verificado que OnlineEEGDataset soporta segmentación temporal (TRIAL_SEGMENT)
+   - Verificado que Entrenador/Evaluador son genéricos y reutilizables
+   - Conclusión: la estructura per-subject con k-fold no sirve para TL;
+     se necesita leave-one-subject-out con entrenamiento multi-sujeto
+
+2. CREACIÓN DE src/lanzador_TL.py:
+   - Nuevo script de transfer learning con leave-one-subject-out
+   - Cabezal configurable idéntico a experimento_CNNs.py:
+     * DATA_DIR, TRIAL_SEGMENT, TARGET_IDX, UNIFIED_STIM
+     * MODEL_NAME/MODEL_KWARGS (EEGNet, ShallowConvNet, DeepConvNet, iSpeechCNN)
+     * AUGMENT_KWARGS con augmentación online (band-noise + FT-surrogate)
+     * MASTER_SEED, N_SEEDS, VAL_FRAC, hiperparámetros de entrenamiento
+   - HELD_OUT_SUBJECTS: permite especificar qué sujetos usar como objetivo
+     (None = todos, [3] = solo S03, [1,6,9,14] = varios)
+   - Bucle principal: entrena en N-1 sujetos, evalúa zero-shot en el held-out
+   - Los trials de los N-1 sujetos se concatenan y mezclan aleatoriamente
+     (DataLoader shuffle=True) - cada batch tiene trials de distintos sujetos
+   - Guarda pretrained_model.pth para permitir fine-tuning posterior
+   - Normalización Z-score por canal calculada sobre fuente train y aplicada
+     a fuente (train/val) y objetivo (test)
+   - Reutiliza OnlineEEGDataset, Entrenador, Evaluador sin modificaciones
+
+3. CREACIÓN DE src/resultados_TL.py:
+   - Script de visualización adaptado para estructura TL (sin folds)
+   - collect_tl_data(): lee archivos directamente de seed_X/ en vez de seed_X/fold_Y/
+   - Mismas visualizaciones que resultados_aug_online.py:
+     * Learning curves, confusion matrices, boxplots P/R/F1 (por sujeto)
+     * Global: métricas entre sujetos, matrices de confusión globales,
+       precisión por sujeto con AVG
+   - Detecta directorios con sufijo _heldout automáticamente
+
+4. ELIMINACIÓN DE FILTRADO DE TRIALS:
+   - Se quitó FILTER_ONLY_IMAGINATED y FILTER_ONLY_CLEAN del cabezal
+   - Los datos en clean_preprocessed/ ya vienen filtrados (solo imaginada + limpios)
+   - Se eliminó la función filter_trials() y sus llamadas
+
+RESUMEN:
+- Pipeline de transfer learning listo: leave-one-subject-out + zero-shot evaluation
+- Modelo pre-entrenado guardado para explorar fine-tuning después
+- Script de visualización adaptado para la estructura sin folds
+- Todo configurable desde el cabezal (modelo, aumentación, ventana temporal, sujetos)
+
+Se hizo para EEGNet y DeepConvNet con segmentación en ventanas de 1s solapadas 0.5s
+los resultados no escapan del azar ni en el sujeto de prueba ni en los datos de
+validación.
+================================================================================

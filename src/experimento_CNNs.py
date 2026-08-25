@@ -44,7 +44,7 @@ from models import EEGNet, ShallowConvNet, DeepConvNet, iSpeechCNN
 # -----------------------------
 DATA_DIR = Path(__file__).resolve().parents[1] / "data" / "clean_preprocessed"
 EXPERIMENTS_ROOT = Path(__file__).resolve().parents[1] / "experiments"
-EXPERIMENT_NAME = "128_splited_DeepCN_segmented"
+EXPERIMENT_NAME = "128_unified_EEGNet_segmented"
 
 # Parseo de argumentos CLI
 parser = argparse.ArgumentParser(description='EEG Experiment Runner')
@@ -77,7 +77,7 @@ TRIAL_SEGMENT = tuple(args.trial_segment) if args.trial_segment else (None, None
 
 # TARGET SELECTION (0: Modalidad, 1: Estímulo, 2: Artefacto)
 TARGET_IDX = 1
-UNIFIED_STIM = False  # Solo aplica si TARGET_IDX == 1: True = 11 clases de estímulo (sin split vocales/comandos)
+UNIFIED_STIM = True  # Solo aplica si TARGET_IDX == 1: True = 11 clases de estímulo (sin split vocales/comandos)
 
 # experiment control
 MASTER_SEED = 17    # setea a None si no querés seed maestro
@@ -108,7 +108,7 @@ USE_CLASS_WEIGHT = True  # True = enable balanced class weights in CrossEntropyL
 # -----------------------------
 # MODEL selection block
 # -----------------------------
-MODEL_NAME = "DeepConvNet"
+MODEL_NAME = "EEGNet"
 
 if MODEL_NAME == "EEGNet":
     MODEL_CLASS = EEGNet

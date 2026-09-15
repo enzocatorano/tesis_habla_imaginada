@@ -225,6 +225,8 @@ class Evaluador:
                 self.nombres_clases = ['Imaginada', 'Pronunciada']
             elif self.target_idx == 2:
                 self.nombres_clases = ['Limpio', 'Parpadeo']
+            elif self.target_idx == 3:
+                self.nombres_clases = ['Vocal', 'Comando']
 
         print(f"\n--- Reporte de Clasificación (Target Idx: {self.target_idx}) ---")
         print(classification_report(y_true, y_pred, target_names=self.nombres_clases, zero_division=0))

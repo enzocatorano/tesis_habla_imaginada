@@ -258,3 +258,72 @@ Se hizo para EEGNet y DeepConvNet con segmentación en ventanas de 1s solapadas 
 los resultados no escapan del azar ni en el sujeto de prueba ni en los datos de
 validación.
 ================================================================================
+
+================================================================================
+Fecha: 2026-09-15
+================================================================================
+TRABAJO REALIZADO:
+
+1. EXPERIMENTO DE ML CLÁSICO SOBRE ESPACIO TANGENTE RIEMANNIANO
+   (src/ML_TS_Riemman_experiment.py):
+   - Lanzador de clasificadores clásicos (Reg. Logística L1, SVM lineal, KNN,
+     Random Forest, Gradient Boosting) sobre la proyección al espacio tangente
+     de las matrices de covarianza (pyriemann: mean_riemann + tangent_space).
+   - Partición de trials (StratifiedKFold + train/val/test) ANTES de cualquier
+     operación topológica; la media Riemanniana se calcula SOLO con train,
+     evitando fuga de datos.
+   - Tarea configurable: "separado" (vocales / comandos), "unificado" (11 clases)
+     y "binario" (vocal vs comando).
+   - Z-score opcional de features con parámetros aprendidos solo de train.
+   - Exporta metadata.json, test_preds.npz, confusion_matrix.npy y
+     classification_report.json por clasificador/fold/seed + summary_runs.json.
+
+2. VISUALIZADOR DE RESULTADOS (src/recopilar_resultados_riemman.py):
+   - Gráficos intra-sujeto y globales: boxplots de Precisión/Recall/F1,
+     matrices de confusión y precisión por sujeto (bloques por clasificador
+     con promedios "por clasificador" y "absoluto").
+   - Detecta el modo desde experiment_config.json y auto-detecta los
+     clasificadores a partir de los directorios de folds.
+
+3. COMPARACIÓN CON EEGNet:
+   - Corrida binaria sobre los 15 sujetos (375 runs). La precisión media de los
+     clasificadores Riemannianos se ubica ~0.55-0.59, por debajo de EEGNet
+     (~0.598) pero cerca del azar; la agregación es distinta (media de medias
+     por sujeto vs. todos los folds juntos), por lo que la comparación es
+     orientativa.
+
+4. NUEVO DATASET DE COVARIANZAS ESPECTRO-ESPACIALES
+   (src/generate_clean_corr_bandas.py):
+   - Fuente: data/clean_preprocessed -> data/clean_preprocessed_corr_bandas.
+   - Cada canal se descompone en 5 bandas EEG clásicas mediante una DWT
+     estacionaria a-trous (Daubechies-4), al estilo de
+     preprocesamiento_segun_bolanos_rufiner:
+       delta (<4 Hz), theta (4-8 Hz), alpha (8-12 Hz),
+       beta (12-32 Hz, reconstruida como nodos 12-16 + 16-32), gamma (>32 Hz).
+     Todas las bandas con largo N/2 = 256.
+   - Se apila el trial banda-major (n_bandas x canales, 256) y se calcula la
+     matriz de covarianza espacial completa R = (Xc @ Xc.T)/(T-1) -> (30, 30)
+     por trial. Los bloques 6x6 de la diagonal son las covarianzas por banda;
+     los bloques fuera de diagonal, la covarianza entre bandas. Separar por
+     banda equivale a extraer los bloques de la diagonal en el experimento.
+   - 15 sujetos / 5449 trials; process_log.json con el detalle de bandas,
+     orden de filas/columnas y fórmula de covarianza.
+   - Imagen de control 3x15 (3 trials al azar por sujeto) con colormap cividis
+     (data/clean_preprocessed_corr_bandas/grid_3x15_corr_bandas.png).
+
+5. GENERALIZACIÓN DEL EXPERIMENTO RIEMANN A 4 MODOS (parámetro MODO_MATRIZ):
+   - "espacial":          matriz 6x6 del dataset original      -> 21 features TS.
+   - "espectro_espacial": matriz 30x30 completa               -> 465 features TS.
+   - "espacial_banda":    5 bloques 6x6 de la diagonal (bandas) -> 21 features c/u.
+   - "frecuencial_canal": 6 bloques 5x5 de la diagonal (canales)-> 15 features c/u.
+   - Selección automática del dataset según el modo y extracción de los bloques
+     correspondientes; la metadata y experiment_config.json registran modo,
+     bloque, tamaño de matriz y nº de features. Verificado end-to-end (S05).
+
+RESUMEN:
+- Pipeline completo de ML clásico Riemanniano reutilizable (con visualizador),
+  ahora extensible a covarianzas espaciales y espectro-espaciales por banda.
+- El nuevo dataset de covarianzas por banda permite comparar, dentro de la
+  geometría Riemanniana, qué banda discrimina mejor el habla imaginada y si la
+  información cruzada entre bandas aporta por sobre las bandas individuales.
+================================================================================

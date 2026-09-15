@@ -44,7 +44,7 @@ from models import EEGNet, ShallowConvNet, DeepConvNet, iSpeechCNN
 # -----------------------------
 DATA_DIR = Path(__file__).resolve().parents[1] / "data" / "clean_preprocessed"
 EXPERIMENTS_ROOT = Path(__file__).resolve().parents[1] / "experiments"
-EXPERIMENT_NAME = "128_unified_EEGNet_segmented"
+EXPERIMENT_NAME = "128_vowelsvscommands_ShallowCN_clean"
 
 # Parseo de argumentos CLI
 parser = argparse.ArgumentParser(description='EEG Experiment Runner')
@@ -75,8 +75,8 @@ FS = 128  # Frecuencia de muestreo de los datos (Hz)
 #   (1.0, 3.0)   → Desde el segundo 1 hasta el 3 (ventana de 2s en medio)
 TRIAL_SEGMENT = tuple(args.trial_segment) if args.trial_segment else (None, None)
 
-# TARGET SELECTION (0: Modalidad, 1: Estímulo, 2: Artefacto)
-TARGET_IDX = 1
+# TARGET SELECTION (0: Modalidad, 1: Estímulo, 2: Artefacto, 3: Vocal vs Comando)
+TARGET_IDX = 3
 UNIFIED_STIM = True  # Solo aplica si TARGET_IDX == 1: True = 11 clases de estímulo (sin split vocales/comandos)
 
 # experiment control
@@ -89,10 +89,10 @@ VAL_FRAC = 0.2
 
 # training hyperparams
 BATCH_SIZE = 16
-EPOCHS = 50
+EPOCHS = 100
 LR = 1e-3
 PATIENCE = 20
-DROPOUT = 0.5
+DROPOUT = 0.2
 HIDDEN_UNITS = None
 
 SUBJECT = None
@@ -108,7 +108,7 @@ USE_CLASS_WEIGHT = True  # True = enable balanced class weights in CrossEntropyL
 # -----------------------------
 # MODEL selection block
 # -----------------------------
-MODEL_NAME = "EEGNet"
+MODEL_NAME = "ShallowConvNet"
 
 if MODEL_NAME == "EEGNet":
     MODEL_CLASS = EEGNet
@@ -314,8 +314,14 @@ if __name__ == '__main__':
             subsets_to_process = [(target_names[TARGET_IDX], {
                 "stim_min": None, "stim_max": None, "n_classes": None
             })]
+        elif TARGET_IDX == 3:
+            # Vocal vs Comando (binario): dataset completo, etiqueta derivada
+            # Vocales: estímulos 1-5 -> clase 0; Comandos: estímulos 6-11 -> clase 1
+            subsets_to_process = [("vocal_vs_comando", {
+                "stim_min": None, "stim_max": None, "n_classes": 2
+            })]
         else:
-            raise ValueError(f"TARGET_IDX {TARGET_IDX} no soportado. Valores válidos: 0,1,2.")
+            raise ValueError(f"TARGET_IDX {TARGET_IDX} no soportado. Valores válidos: 0,1,2,3.")
 
         for subset_name, params in subsets_to_process:
             stim_min = params.get('stim_min')
@@ -341,6 +347,10 @@ if __name__ == '__main__':
             # Ajuste Dinámico de n_classes según el TARGET_IDX
             if TARGET_IDX == 1:
                 n_classes_target = n_classes_stim
+            elif TARGET_IDX == 3:
+                # Vocal vs Comando: derivar de columna estímulo (1)
+                stim = Y_subset_full[:, 1].astype(int)
+                n_classes_target = len(np.unique((stim >= 6).astype(int)))
             else:
                 # Para modalidad o artefacto, contamos las clases únicas en ese subset
                 n_classes_target = len(np.unique(Y_subset_full[:, TARGET_IDX]))
@@ -358,7 +368,11 @@ if __name__ == '__main__':
 
                 # Estratificamos según el TARGET que vamos a predecir
                 skf = StratifiedKFold(n_splits=K_FOLDS, shuffle=True, random_state=seed_val)
-                splits = list(skf.split(X_subset, Y_subset_full[:, TARGET_IDX].astype(int)))
+                if TARGET_IDX == 3:
+                    stratify_labels = (Y_subset_full[:, 1].astype(int) >= 6).astype(int)
+                else:
+                    stratify_labels = Y_subset_full[:, TARGET_IDX].astype(int)
+                splits = list(skf.split(X_subset, stratify_labels))
                 
                 for fold_idx, (train_idx_local, test_idx_local) in enumerate(splits, start=1):
                     print(f"\n>>> Fold {fold_idx}/{len(splits)}")
@@ -391,6 +405,12 @@ if __name__ == '__main__':
                                     raise ValueError("stim_min es requerido para TARGET_IDX=1")
                                 stim = Y_adj[:, 1].astype(int)
                                 Y_adj[:, 1] = stim - stim_min  # Offset automático según stim_min
+                            elif target_idx == 3:
+                                # Vocal vs Comando: 1-5 -> 0, 6-11 -> 1
+                                # Añadir columna 3 para la etiqueta binaria
+                                stim = Y_adj[:, 1].astype(int)
+                                vocal_vs_comando = (stim >= 6).astype(int)
+                                Y_adj = np.column_stack([Y_adj, vocal_vs_comando])
                             else:
                                 # Modalidad (0) o Artefacto (2) - Asegurar que empieza en 0
                                 val = Y_adj[:, target_idx].astype(int)

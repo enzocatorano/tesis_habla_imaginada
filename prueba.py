@@ -1859,3 +1859,124 @@ plt.title('Promedio de todos los Comandos (P3)')
 plt.ylim(-30, 30)
 plt.tight_layout()
 plt.show()
+
+########################################################################
+########################################################################
+########################################################################
+
+import numpy as np
+import matplotlib.pyplot as plt
+
+ruta = 'data/clean_preprocessed/S'
+counts = np.zeros((15, 11))
+
+for i in range(15):
+    if i < 9:
+        aux = ruta + f'0{i+1}_clean.npz'
+    else:
+        aux = ruta + f'{i+1}_clean.npz'
+    data = np.load(aux)
+    # quiero contar la cantidad de etiquetas de
+    # estimulo que hay de cada tipo y[:,1]
+    y = data['y'][:,1]
+    for label in range(1, 12):
+        counts[i, label-1] = np.sum(y == label)
+    print(f"Sujeto {i+1}: {counts[i]}")
+
+etiquetas = ['A', 'E', 'I', 'O', 'U',
+            'Arriba', 'Abajo', 'Izquierda',
+            'Derecha', 'Adelante', 'Atras']
+counts_norm = counts / np.sum(counts, axis=1, keepdims=True)
+# boxplots de counts
+# con los estimulos siendo el eje x
+# quiero que se vean todos los puntos
+plt.figure(figsize=(12, 6))
+plt.boxplot(counts_norm, showfliers=False)
+for i in range(11):
+    y_points = counts_norm[:, i]
+    x_points = np.random.normal(i + 1, 0.04, size=len(y_points))
+    plt.scatter(x_points, y_points, alpha=0.6, color='tab:blue', edgecolors='white')
+plt.title('Distribución de cantidad de trials por estímulo (15 sujetos)')
+plt.ylabel('Cantidad de trials')
+plt.xlabel('Estímulo')
+plt.xticks(range(1, 12), etiquetas, rotation=45)
+plt.grid(axis='y', linestyle='--', alpha=0.7)
+plt.tight_layout()
+plt.show()
+
+########################################################################
+########################################################################
+########################################################################
+
+import h5py
+import numpy as np
+import matplotlib.pyplot as plt
+
+# Open the MATLAB v7.3 file using h5py
+filepath = "data/carlos_sarmiento_raw/ST2/s1A2.mat"
+data = h5py.File(filepath, 'r')
+var_name = list(data.keys())[0]
+if var_name in data:
+    ans = np.array(data[var_name])
+    print(type(ans), ans.shape)
+data.close()
+# variable ans guardada
+
+eje = np.arange(0, 50, 1)
+tiempo = np.arange(0, ans.shape[0]/128, 1/128)
+plt.figure(figsize=(16,8))
+for i in range(ans.shape[1]):
+    plt.subplot(23, 1, i+1)
+    plt.plot(tiempo, ans[:,i])
+    plt.xlim(-1, 50)
+    plt.xticks(eje)
+plt.tight_layout()
+plt.show()
+
+sin1seg = np.sin(tiempo*2*np.pi*0.992248062)*50
+plt.figure(figsize=(16,8))
+plt.plot(tiempo, ans[:,1]-np.mean(ans[:,1])-sin1seg)
+#plt.ylim(41.6452, 41.64525)
+plt.tight_layout()
+plt.show()
+
+plt.figure(figsize=(16,8))
+plt.plot(tiempo, ans[:,1]-np.mean(ans[:,1]))
+plt.plot(tiempo, sin1seg)
+#plt.xlim(0, 100)
+plt.tight_layout()
+plt.show()
+
+fftsegundero = np.fft.fft(ans[:,1]-np.mean(ans[:,1]))
+freqssegundero = np.fft.fftfreq(len(fftsegundero), 1/128)
+fftsin1seg = np.fft.fft(sin1seg)
+freqsfftsin1seg = np.fft.fftfreq(len(fftsin1seg), 1/128)
+plt.figure(figsize=(16,8))
+plt.subplot(2, 1, 1)
+plt.plot(tiempo, ans[:,1]-np.mean(ans[:,1]))
+plt.plot(tiempo, sin1seg)
+plt.subplot(2, 1, 2)
+plt.plot(freqssegundero, np.abs(fftsegundero))
+plt.plot(freqsfftsin1seg, np.abs(fftsin1seg))
+plt.xlim(0, 12)
+plt.tight_layout()
+plt.show()
+
+fftsignal = np.zeros_like(ans)
+freqsfftsignal = np.zeros_like(ans)
+for i in range(2, 16):
+    fftsignal[:,i] = np.fft.fft(ans[:,i]-np.mean(ans[:,i]))
+    freqsfftsignal[:,i] = np.fft.fftfreq(len(fftsignal[:,i]), 1/128)
+
+plt.figure(figsize=(17,9))
+for i in range(2, 16):
+    plt.xticks([])
+    plt.subplot(14, 2, 2*i-3)
+    plt.plot(tiempo, ans[:,i])
+    plt.xlim(-1, 10)
+    plt.xticks([])
+    plt.subplot(14, 2, 2*i-2)
+    plt.plot(freqsfftsignal[:,i], np.abs(fftsignal[:,i]))
+    plt.xlim(0, 15)
+plt.tight_layout(h_pad=1)
+plt.show()

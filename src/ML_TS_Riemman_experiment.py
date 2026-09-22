@@ -14,8 +14,11 @@ En todos los casos: y = (trials, 3) [modalidad, estímulo, artefacto]
 
 Pipeline por fold (sin fuga de datos):
   1. Partición de TRIALS en train / val / test (StratifiedKFold + train_test_split).
-  2. Cálculo de la media Riemanniana SOLO con las matrices de entrenamiento.
-  3. Proyección log-map de los tres conjuntos al espacio tangente (pyriemann.tangent_space).
+  2. Para cada bloque del MODO_MATRIZ espacial_banda (5 bandas 6x6) o frecuencial_canal
+     (6 canales 5x5): media Riemanniana SOLO con las matrices de entrenamiento de ese
+     bloque y proyección log-map de train/val/test al espacio tangente (pyriemann).
+  3. Concatenación horizontal de los B vectores resultantes en un único feature vector
+     por trial, que es la entrada de los clasificadores.
   4. (Opcional) Z-score de los vectores de features con parámetros del entrenamiento.
   5. Entrenamiento de los clasificadores activados en el cabezal y exportación de
      métricas + matrices de confusión por clasificador.
@@ -46,7 +49,7 @@ from pyriemann.tangentspace import tangent_space
 # CONFIGURACIÓN (modificar aquí)
 # -----------------------------
 EXPERIMENTS_ROOT = Path(__file__).resolve().parents[1] / "experiments"
-EXPERIMENT_NAME = "ML_TS_Riemman_espectroespacial_separado"
+EXPERIMENT_NAME = "ML_TS_Riemman_OvR_espectroespacial_"
 
 SUFIJO_DATOS = "_clean"
 NOMBRE_ARRAY_DATOS, NOMBRE_ARRAY_ETIQUETAS = "x", "y"
@@ -61,10 +64,11 @@ BAND_NAMES = ["delta", "theta", "alpha", "beta", "gamma"]
 CHANNEL_NAMES = ["F3", "F4", "C3", "C4", "P3", "P4"]
 
 # Tarea a resolver:
-#   "separado"  -> subsets "vocales" (1-5) y "comandos" (6-11) por separado
-#   "unificado" -> 11 clases de estímulo en un solo problema
-#   "binario"   -> vocal vs comando (estímulos 1-5 -> 0 ; 6-11 -> 1)
-EXPERIMENT_MODE = "separado"
+#   "separado"    -> subsets "vocales" (1-5) y "comandos" (6-11) por separado
+#   "unificado"   -> 11 clases de estímulo en un solo problema
+#   "binario"     -> vocal vs comando (estímulos 1-5 -> 0 ; 6-11 -> 1)
+#   "one_vs_rest" -> Múltiples tests binarios intra-clase (ej. "A" vs "E,I,O,U")
+EXPERIMENT_MODE = "one_vs_rest"
 
 # Control de experimento
 MASTER_SEED = 42
@@ -118,12 +122,6 @@ def data_dir_for_mode(modo: str) -> Path:
 def bloques_diagonal(modo: str, X_all: np.ndarray):
     """
     Devuelve lista de (nombre_bloque, X_bloque).
-
-      espacial / espectro_espacial -> [("", X_all)]              (matriz completa)
-      espacial_banda               -> 5 bloques 6x6 de la diagonal (una por banda)
-      frecuencial_canal            -> 6 bloques 5x5 de la diagonal (una por canal)
-
-    X_all: (trials, N, N) con N = 6 (espacial) o 30 (espectro-espacial).
     """
     if modo in ("espacial", "espectro_espacial"):
         return [("", X_all)]
@@ -189,6 +187,8 @@ def define_tarea(mode: str, Y_all: np.ndarray):
     Devuelve lista de (subset_name, mask, y_target, n_classes).
     y_target se construye a partir de Y_all[:, 1] (estímulo).
     """
+    targets = []
+    
     if mode in ("separado", "unificado"):
         if mode == "separado":
             subsets = [
@@ -197,17 +197,37 @@ def define_tarea(mode: str, Y_all: np.ndarray):
             ]
         else:
             subsets = [("estimulo_unificado", 1, 11, 11)]
-        targets = []
+            
         for nombre, stim_min, stim_max, n_classes in subsets:
             mask = (Y_all[:, 1].astype(int) >= stim_min) & (Y_all[:, 1].astype(int) <= stim_max)
             y_t = (Y_all[:, 1].astype(int) - stim_min)
             targets.append((nombre, mask, y_t, n_classes))
+            
     elif mode == "binario":
         mask = np.ones(Y_all.shape[0], dtype=bool)
         y_t = (Y_all[:, 1].astype(int) >= 6).astype(int)
-        targets = [("vocal_vs_comando", mask, y_t, 2)]
+        targets.append(("vocal_vs_comando", mask, y_t, 2))
+        
+    elif mode == "one_vs_rest":
+        # Sub-experimentos binarios para Vocales (1 a 5)
+        mask_vocales = (Y_all[:, 1].astype(int) >= 1) & (Y_all[:, 1].astype(int) <= 5)
+        vocales_names = {1: "A", 2: "E", 3: "I", 4: "O", 5: "U"}
+        for v_id, v_name in vocales_names.items():
+            # 1 si es la vocal objetivo, 0 si es cualquier otra vocal
+            y_t = (Y_all[:, 1].astype(int) == v_id).astype(int) 
+            targets.append((f"OvR_vocal_{v_name}", mask_vocales, y_t, 2))
+            
+        # Sub-experimentos binarios para Comandos (6 a 11)
+        mask_comandos = (Y_all[:, 1].astype(int) >= 6) & (Y_all[:, 1].astype(int) <= 11)
+        comandos_names = {6: "Arriba", 7: "Abajo", 8: "Izquierda", 9: "Derecha", 10: "Adelante", 11: "Atras"}
+        for c_id, c_name in comandos_names.items():
+            # 1 si es el comando objetivo, 0 si es cualquier otro comando
+            y_t = (Y_all[:, 1].astype(int) == c_id).astype(int)
+            targets.append((f"OvR_comando_{c_name}", mask_comandos, y_t, 2))
+            
     else:
-        raise ValueError(f"EXPERIMENT_MODE desconocido: {mode}. Valores válidos: separado, unificado, binario")
+        raise ValueError(f"EXPERIMENT_MODE desconocido: {mode}. Valores válidos: separado, unificado, binario, one_vs_rest")
+        
     return targets
 
 # -----------------------------
@@ -289,8 +309,6 @@ if __name__ == '__main__':
         subj_out = EXPERIMENT_ROOT / subj_name
         subj_out.mkdir(parents=True, exist_ok=True)
 
-        bloques = bloques_diagonal(MODO_MATRIZ, X_all)
-
         tareas = define_tarea(EXPERIMENT_MODE, Y_all)
 
         for subset_name, mask, y_target, n_classes_target in tareas:
@@ -303,138 +321,150 @@ if __name__ == '__main__':
             subset_out = subj_out / subset_name
             subset_out.mkdir(parents=True, exist_ok=True)
 
-            for bloque_name, X_bloque in bloques:
-                X_subset = X_bloque[mask]
-                m_size = X_subset.shape[1]
+            X_subset_all = X_all[mask]
+            bloques_subset = bloques_diagonal(MODO_MATRIZ, X_subset_all)
+            print(f"[Subset {subset_name}] {len(bloques_subset)} bloque(s), {X_subset_all.shape[0]} trials")
 
-                if bloque_name:
-                    block_out = subset_out / bloque_name
-                    block_out.mkdir(parents=True, exist_ok=True)
-                    print(f"\n--- Bloque {bloque_name}: matrices {m_size}x{m_size} ---")
-                else:
-                    block_out = subset_out
+            for seed_i in range(N_SEEDS):
+                seed_val = int(SEEDS_LIST[seed_i])
+                print(f"\n>>> seed {seed_i} (val={seed_val})")
+                seed_out = subset_out / f"seed_{seed_i}"
+                seed_out.mkdir(parents=True, exist_ok=True)
 
-                for seed_i in range(N_SEEDS):
-                    seed_val = int(SEEDS_LIST[seed_i])
-                    print(f"\n>>> seed {seed_i} (val={seed_val})")
-                    seed_out = block_out / f"seed_{seed_i}"
-                    seed_out.mkdir(parents=True, exist_ok=True)
+                set_global_seed(seed_val)
 
-                    set_global_seed(seed_val)
+                skf = StratifiedKFold(n_splits=K_FOLDS, shuffle=True, random_state=seed_val)
+                splits = list(skf.split(X_subset_all, y_full))
 
-                    skf = StratifiedKFold(n_splits=K_FOLDS, shuffle=True, random_state=seed_val)
-                    splits = list(skf.split(X_subset, y_full))
+                for fold_idx, (train_idx, test_idx) in enumerate(splits, start=1):
+                    print(f"\n>>> Fold {fold_idx}/{len(splits)}")
+                    fold_out = seed_out / f"fold_{fold_idx}"
+                    fold_out.mkdir(parents=True, exist_ok=True)
 
-                    for fold_idx, (train_idx, test_idx) in enumerate(splits, start=1):
-                        print(f"\n>>> Fold {fold_idx}/{len(splits)}")
-                        fold_out = seed_out / f"fold_{fold_idx}"
-                        fold_out.mkdir(parents=True, exist_ok=True)
+                    # 1. División de TRIALS (la partición se hace ANTES de cualquier operación topológica)
+                    y_train_full = y_full[train_idx]
+                    y_test = y_full[test_idx]
 
-                        # 1. División de TRIALS (la partición se hace ANTES de cualquier operación topológica)
-                        X_train_full = X_subset[train_idx]
-                        y_train_full = y_full[train_idx]
-                        X_test = X_subset[test_idx]
-                        y_test = y_full[test_idx]
+                    if VAL_FRAC > 0.0:
+                        idx_pool = np.arange(len(y_train_full))
+                        idx_tr, idx_va = train_test_split(
+                            idx_pool, test_size=VAL_FRAC,
+                            stratify=y_train_full, random_state=seed_val + fold_idx, shuffle=True
+                        )
+                        y_train = y_train_full[idx_tr]
+                        y_val = y_train_full[idx_va]
+                    else:
+                        y_train = y_train_full
+                        y_val = np.array([])
 
-                        if VAL_FRAC > 0.0:
-                            idx_pool = np.arange(len(X_train_full))
-                            idx_tr, idx_va = train_test_split(
-                                idx_pool, test_size=VAL_FRAC,
-                                stratify=y_train_full, random_state=seed_val + fold_idx, shuffle=True
-                            )
-                            X_train = X_train_full[idx_tr]
-                            y_train = y_train_full[idx_tr]
-                            X_val = X_train_full[idx_va]
-                            y_val = y_train_full[idx_va]
-                        else:
-                            X_train = X_train_full
-                            y_train = y_train_full
-                            X_val = np.empty((0, m_size, m_size))
-                            y_val = np.array([])
+                    n_bloques = len(bloques_subset)
 
-                        metadata = {
-                            "subject": subj_name,
-                            "subset": subset_name,
-                            "modo_matriz": MODO_MATRIZ,
-                            "bloque": bloque_name if bloque_name else None,
-                            "matriz_size": m_size,
-                            "seed_val": seed_val,
-                            "fold_idx": fold_idx,
-                            "mode": EXPERIMENT_MODE,
-                            "n_classes": n_classes_target,
-                            "normalization_ref": "media_riemann_entrenamiento",
-                            "zscore_features": ZSCORE_FEATURES,
-                            "n_train": len(X_train), "n_val": len(X_val), "n_test": len(X_test),
-                            "status": "started"
-                        }
+                    metadata = {
+                        "subject": subj_name,
+                        "subset": subset_name,
+                        "modo_matriz": MODO_MATRIZ,
+                        "seed_val": seed_val,
+                        "fold_idx": fold_idx,
+                        "mode": EXPERIMENT_MODE,
+                        "n_classes": n_classes_target,
+                        "n_bloques": n_bloques,
+                        "normalization_ref": "media_riemann_entrenamiento",
+                        "zscore_features": ZSCORE_FEATURES,
+                        "n_train": (len(y_train) if VAL_FRAC > 0.0 else len(y_train_full)),
+                        "n_val": (len(y_val) if VAL_FRAC > 0.0 else 0),
+                        "n_test": len(y_test),
+                        "status": "started"
+                    }
 
-                        try:
-                            # 2. Media Riemanniana SOLO del entrenamiento (evita fuga de datos)
-                            ref = mean_riemann(X_train)
+                    try:
+                        # 2-3. Por bloque: media Riemanniana SOLO del entrenamiento de ese bloque
+                        F_train_parts, F_test_parts, F_val_parts = [], [], []
+                        bloques_info = []
+                        for bloque_name, X_bloque in bloques_subset:
+                            X_train_bl = X_bloque[train_idx][idx_tr] if VAL_FRAC > 0.0 else X_bloque[train_idx]
+                            X_val_bl = X_bloque[train_idx][idx_va] if VAL_FRAC > 0.0 else np.empty((0, X_bloque.shape[1], X_bloque.shape[1]))
+                            X_test_bl = X_bloque[test_idx]
 
-                            # 3. Log-map + vectorización al espacio tangente (pyriemann)
-                            F_train = tangent_space(X_train, ref)
-                            F_test = tangent_space(X_test, ref)
-                            if X_val.size:
-                                F_val = tangent_space(X_val, ref)
-                            else:
-                                F_val = np.empty((0, F_train.shape[1]))
+                            ref_bl = mean_riemann(X_train_bl)
+                            F_train_bl = tangent_space(X_train_bl, ref_bl)
+                            F_test_bl = tangent_space(X_test_bl, ref_bl)
+                            F_val_bl = tangent_space(X_val_bl, ref_bl) if X_val_bl.size else np.empty((0, F_train_bl.shape[1]))
 
-                            metadata["n_features_ts"] = int(F_train.shape[1])
+                            F_train_parts.append(F_train_bl)
+                            F_test_parts.append(F_test_bl)
+                            F_val_parts.append(F_val_bl)
+                            bloques_info.append({
+                                "bloque": bloque_name if bloque_name else None,
+                                "matriz_size": int(X_bloque.shape[1]),
+                                "n_features": int(F_train_bl.shape[1]),
+                            })
+                            print(f"      [Bloque {bloque_name or 'completo'}] matrices "
+                                  f"{X_bloque.shape[1]}x{X_bloque.shape[1]} -> {F_train_bl.shape[1]} features")
 
-                            # 4. Z-score de features (parámetros del entrenamiento)
-                            if ZSCORE_FEATURES:
-                                F_train, F_val, F_test, feat_mean, feat_std = aplicar_zscore_features(F_train, F_val, F_test)
-                                metadata["zscore"] = {"mean_min": float(feat_mean.min()), "mean_max": float(feat_mean.max()),
-                                                      "std_min": float(feat_std.min()), "std_max": float(feat_std.max())}
+                        F_train = np.hstack(F_train_parts)
+                        F_test = np.hstack(F_test_parts)
+                        F_val = np.hstack(F_val_parts)
 
-                            # 5. Entrenar/exportar cada clasificador activado
-                            for clf_name, clf in construir_clasificadores():
-                                clf_out = fold_out / clf_name
-                                clf_out.mkdir(parents=True, exist_ok=True)
-                                clf_meta = dict(metadata)
-                                clf_meta["classifier"] = clf_name
+                        metadata["bloques_concat"] = bloques_info
+                        if n_bloques == 1:
+                            metadata["bloque"] = bloques_info[0]["bloque"]
+                            metadata["matriz_size"] = bloques_info[0]["matriz_size"]
+                        metadata["n_features_ts"] = int(F_train.shape[1])
+                        print(f"      Feature final concatenada: {F_train.shape[1]} dimensiones/trial")
 
-                                try:
-                                    t0 = time.time()
-                                    clf.fit(F_train, y_train)
-                                    t1 = time.time()
+                        # 4. Z-score de features (parámetros del entrenamiento)
+                        if ZSCORE_FEATURES:
+                            F_train, F_val, F_test, feat_mean, feat_std = aplicar_zscore_features(F_train, F_val, F_test)
+                            metadata["zscore"] = {"mean_min": float(feat_mean.min()), "mean_max": float(feat_mean.max()),
+                                                  "std_min": float(feat_std.min()), "std_max": float(feat_std.max())}
 
-                                    y_pred_val = clf.predict(F_val) if F_val.size else np.array([])
-                                    y_pred_test = clf.predict(F_test)
+                        # 5. Entrenar/exportar cada clasificador activado
+                        for clf_name, clf in construir_clasificadores():
+                            clf_out = fold_out / clf_name
+                            clf_out.mkdir(parents=True, exist_ok=True)
+                            clf_meta = dict(metadata)
+                            clf_meta["classifier"] = clf_name
 
-                                    valid_labels = np.arange(n_classes_target)
-                                    acc_test = accuracy_score(y_test, y_pred_test)
-                                    acc_val = accuracy_score(y_val, y_pred_val) if y_pred_val.size else None
-                                    cm_test = confusion_matrix(y_test, y_pred_test, labels=valid_labels)
-                                    report_test = classification_report(y_test, y_pred_test, labels=valid_labels, output_dict=True, zero_division=0)
+                            try:
+                                t0 = time.time()
+                                clf.fit(F_train, y_train)
+                                t1 = time.time()
 
-                                    np.savez_compressed(clf_out / "test_preds.npz",
-                                                        y_true=y_test, y_pred=y_pred_test,
-                                                        y_true_val=y_val, y_pred_val=y_pred_val)
-                                    np.save(clf_out / "confusion_matrix.npy", cm_test)
-                                    save_json(clf_out / "classification_report.json", report_test)
+                                y_pred_val = clf.predict(F_val) if F_val.size else np.array([])
+                                y_pred_test = clf.predict(F_test)
 
-                                    clf_meta.update({
-                                        "status": "success",
-                                        "train_time_s": float(t1 - t0),
-                                        "test_accuracy": float(acc_test),
-                                        "val_accuracy": (None if acc_val is None else float(acc_val))
-                                    })
-                                    print(f"    [{clf_name}] Acc test={acc_test:.4f} | Acc val={('%.4f' % acc_val) if acc_val is not None else 'N/A'}")
+                                valid_labels = np.arange(n_classes_target)
+                                acc_test = accuracy_score(y_test, y_pred_test)
+                                acc_val = accuracy_score(y_val, y_pred_val) if y_pred_val.size else None
+                                cm_test = confusion_matrix(y_test, y_pred_test, labels=valid_labels)
+                                report_test = classification_report(y_test, y_pred_test, labels=valid_labels, output_dict=True, zero_division=0)
 
-                                except Exception:
-                                    clf_meta["status"] = "error"
-                                    clf_meta["error"] = traceback.format_exc()
-                                    print(f"    [Error] {clf_name}: {clf_meta['error']}")
+                                np.savez_compressed(clf_out / "test_preds.npz",
+                                                    y_true=y_test, y_pred=y_pred_test,
+                                                    y_true_val=y_val, y_pred_val=y_pred_val)
+                                np.save(clf_out / "confusion_matrix.npy", cm_test)
+                                save_json(clf_out / "classification_report.json", report_test)
 
-                                save_json(clf_out / "metadata.json", clf_meta)
+                                clf_meta.update({
+                                    "status": "success",
+                                    "train_time_s": float(t1 - t0),
+                                    "test_accuracy": float(acc_test),
+                                    "val_accuracy": (None if acc_val is None else float(acc_val))
+                                })
+                                print(f"    [{clf_name}] Acc test={acc_test:.4f} | Acc val={('%.4f' % acc_val) if acc_val is not None else 'N/A'}")
 
-                        except Exception:
-                            metadata["status"] = "error"
-                            metadata["error"] = traceback.format_exc()
-                            save_json(fold_out / "metadata.json", metadata)
-                            print(f"    [Error] Fold {fold_idx}: {metadata['error']}")
+                            except Exception:
+                                clf_meta["status"] = "error"
+                                clf_meta["error"] = traceback.format_exc()
+                                print(f"    [Error] {clf_name}: {clf_meta['error']}")
+
+                            save_json(clf_out / "metadata.json", clf_meta)
+
+                    except Exception:
+                        metadata["status"] = "error"
+                        metadata["error"] = traceback.format_exc()
+                        save_json(fold_out / "metadata.json", metadata)
+                        print(f"    [Error] Fold {fold_idx}: {metadata['error']}")
 
     # -----------------------------
     # ÍNDICE DE RESUMEN

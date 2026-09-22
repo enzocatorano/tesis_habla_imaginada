@@ -4,36 +4,23 @@ Script de visualización y resumen de resultados de experimentos ML sobre el
 espacio tangente Riemanniano (ML_TS_Riemman_experiment.py).
 
 Genera dos tipos de análisis:
-1. INTRASUJETO: Por cada sujeto individual
-   - Boxplots de P/R/F1 por clasificador (un grupo por clasificador)
-   - Matrices de confusión (media ± std %) por clasificador
-   - Resumen JSON por clasificador y subset
+1. MODOS CLÁSICOS ("binario", "separado", "unificado")
+   - Boxplots de P/R/F1 macro por clasificador.
+   - Matrices de confusión multiclase por clasificador.
+   - Precisión inter-sujeto.
 
-2. INTERSUJETO: Agregado entre todos los sujetos
-   - Boxplots de P/R/F1 globales por clasificador
-   - Matrices de confusión globales por clasificador
-   - Precisión por sujeto (cajas por clasificador dentro de cada sujeto,
-     promedio general por clasificador y promedio absoluto)
-
-Admite los modos definidos en experiment_config.json:
-  - "binario"   -> subset "vocal_vs_comando" (2 clases, chance 0.5)
-  - "separado"  -> subsets "vocales" (5) y "comandos" (6)
-  - "unificado" -> subset "estimulo_unificado" (11 clases)
-Si no existe config, asume formato binario (default de ML_TS_Riemman).
-
-Los clasificadores se auto-detectan desde las carpetas reales dentro de cada fold.
+2. MODO "one_vs_rest" (OvR)
+   - Extrae métricas exclusivamente de la Clase 1 (Objetivo).
+   - Intrasujeto: Perfil de decodificación (Boxplots dobles agrupados) y Grilla CM 2x2.
+   - Intersujeto: Firmas Topológicas, Ranking BCI Illiteracy (Boxplots poblacionales), y Grilla CM global.
+   - Analiza exclusivamente el clasificador definido en OVR_TARGET_CLASSIFIER.
 
 Estructura de salida:
   experiments/<EXPERIMENT>/visualization_results/
     ├── <subject>/
-    │   ├── metrics_boxplots.png
-    │   ├── confusion_matrices.png
-    │   └── summary.json
+    │   └── *.png
     └── global/
-        ├── metrics_boxplots_global.png
-        ├── confusion_matrices_global.png
-        ├── precision_by_subject.png
-        └── global_summary.json
+        └── *.png
 """
 
 from pathlib import Path
@@ -42,13 +29,18 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 from typing import List, Dict
+from matplotlib.patches import Patch
 
 ####################################################################################################################################
 # CONFIG
 ####################################################################################################################################
 EXPERIMENTS_ROOT = Path(__file__).resolve().parents[1] / "experiments"
-EXPERIMENT_NAME_PREFIX = "ML_TS_Riemman_espectroespacial_separado_20260915-083442_CatoranoBrothers"
+EXPERIMENT_NAME_PREFIX = "ML_TS_Riemman_OvR_espectroespacial_20260921-215456_CatoranoBrothers"
 OUTPUT_SUBDIR = "visualization_results"
+
+# --- CONFIGURACIÓN ESPECÍFICA PARA MODO OVR ---
+OVR_TARGET_CLASSIFIER = "reg_log_L1"  # Único clasificador a analizar en modo one_vs_rest
+# ----------------------------------------------
 
 METRICS_NAMES = ["Precision", "Recall", "F1-Score"]
 METRIC_COLORS = {"Precision": "#1f77b4", "Recall": "#2ca02c", "F1-Score": "#d62728"}
@@ -102,20 +94,41 @@ def find_latest_experiment(root: Path, prefix: str) -> Path:
 
 
 def detect_experiment_config(exp_root: Path) -> dict:
-    """Detecta el modo del experimento según experiment_config.json y devuelve la config de subsets."""
+    """Detecta el modo del experimento. Si es one_vs_rest, genera la config dinámicamente."""
     config_path = exp_root / "experiment_config.json"
     if not config_path.exists():
         print("[Visualizer] No experiment_config.json found. Asumiendo modo binario.")
-        return MODE_CONFIG["binario"]
+        cfg = MODE_CONFIG["binario"].copy()
+        cfg["mode"] = "binario"
+        return cfg
 
     with open(config_path, encoding="utf8") as fh:
         config = json.load(fh)
 
     mode = config.get("mode", "binario")
+    
+    if mode == "one_vs_rest":
+        subsets = []
+        subset_configs = []
+        for v in ["A", "E", "I", "O", "U"]:
+            name = f"OvR_vocal_{v}"
+            subsets.append(name)
+            subset_configs.append({"name": name, "display": f"Vocal {v} vs Resto", "n_classes": 2, "class_names": ["Resto", v], "chance": 0.5})
+        for c in ["Arriba", "Abajo", "Izquierda", "Derecha", "Adelante", "Atras"]:
+            name = f"OvR_comando_{c}"
+            subsets.append(name)
+            subset_configs.append({"name": name, "display": f"Cmd {c} vs Resto", "n_classes": 2, "class_names": ["Resto", c], "chance": 0.5})
+        return {"mode": "one_vs_rest", "subsets": subsets, "subset_configs": subset_configs}
+
     if mode in MODE_CONFIG:
-        return MODE_CONFIG[mode]
+        cfg = MODE_CONFIG[mode].copy()
+        cfg["mode"] = mode
+        return cfg
+    
     print(f"[Visualizer] mode '{mode}' no reconocido. Asumiendo modo binario.")
-    return MODE_CONFIG["binario"]
+    cfg = MODE_CONFIG["binario"].copy()
+    cfg["mode"] = "binario"
+    return cfg
 
 
 def load_json_safe(path: Path):
@@ -134,10 +147,6 @@ def save_json_safe(path: Path, obj):
 
 
 def discover_classifiers(subset_dir: Path) -> List[str]:
-    """
-    Detecta los clasificadores desde las carpetas reales dentro de un fold.
-    Busca la jerarquía seed_i/fold_i y lista los subdirectorios del primer fold con metadata.json.
-    """
     seed_dirs = sorted([p for p in subset_dir.iterdir() if p.is_dir() and p.name.startswith("seed_")])
     anchors = seed_dirs or [subset_dir]
     for anchor in anchors:
@@ -148,7 +157,6 @@ def discover_classifiers(subset_dir: Path) -> List[str]:
 
 
 def classifier_color(name: str, n_total: int) -> str:
-    """Color consistente por clasificador usando la paleta RGB circular."""
     try:
         idx = sorted_n_classifiers.index(name)
     except (ValueError, AttributeError):
@@ -158,9 +166,6 @@ def classifier_color(name: str, n_total: int) -> str:
 
 
 def _compute_ylimits(values, chances):
-    """Límites Y para boxplots según fórmula pedida:
-    inferior = max(0, min(0.9*min_val, 0.9*chance))
-    superior = min(1.0, max(1.1*max_val, 1.1*chance))"""
     values = np.asarray(values, dtype=float)
     values = values[~np.isnan(values)]
     data_min = float(np.min(values)) if values.size else 0.0
@@ -173,7 +178,6 @@ def _compute_ylimits(values, chances):
 
 
 def _overlay_points(ax, positions, data_groups, alpha=0.5, color="#333333", s=15, width=0.2):
-    """Dibuja todos los puntos de cada grupo (jitter horizontal, semitransparentes)."""
     rng = np.random.default_rng(42)
     for pos, data in zip(positions, data_groups):
         data = np.asarray(data, dtype=float)
@@ -186,7 +190,6 @@ def _overlay_points(ax, positions, data_groups, alpha=0.5, color="#333333", s=15
 
 
 def _draw_chance_hline(ax, y, label=None, x0=None, x1=None):
-    """Línea punteada de probabilidad base (a ancho completo o en un tramo x0-x1)."""
     line_kwargs = dict(color='red', linestyle='--', linewidth=1.6, alpha=0.7)
     if label:
         line_kwargs['label'] = label
@@ -199,18 +202,7 @@ def _draw_chance_hline(ax, y, label=None, x0=None, x1=None):
 ####################################################################################################################################
 # RECOLECCIÓN
 ####################################################################################################################################
-def collect_fold_data(subject_dir: Path, subset_config: dict, classifiers: List[str]) -> dict:
-    """
-    Recopila datos de todos los seeds/folds para un sujeto y subset.
-
-    Returns:
-        dict {clasificador: {
-            "metrics": lista de dicts {precision, recall, f1},
-            "confusion_matrices": lista de matrices (normalizadas por fila, %),
-            "test_accuracies": lista de float,
-            "val_accuracies": lista de float
-        }}
-    """
+def collect_fold_data(subject_dir: Path, subset_config: dict, classifiers: List[str], is_ovr: bool = False) -> dict:
     subset_dir = subject_dir / subset_config["name"]
     if not subset_dir.exists():
         return None
@@ -236,12 +228,16 @@ def collect_fold_data(subject_dir: Path, subset_config: dict, classifiers: List[
 
                 cr = load_json_safe(clf_dir / "classification_report.json")
                 if cr:
-                    macro = cr.get("macro avg") or cr.get("macro_avg") or cr.get("macro-average")
-                    if macro:
+                    if is_ovr:
+                        target_metrics = cr.get("1") # Métrica estricta de la clase objetivo
+                    else:
+                        target_metrics = cr.get("macro avg") or cr.get("macro_avg") or cr.get("macro-average")
+                        
+                    if target_metrics:
                         result[clf]["metrics"].append({
-                            "precision": float(macro.get("precision", np.nan)),
-                            "recall": float(macro.get("recall", np.nan)),
-                            "f1": float(macro.get("f1-score", macro.get("f1_score", np.nan)))
+                            "precision": float(target_metrics.get("precision", np.nan)),
+                            "recall": float(target_metrics.get("recall", np.nan)),
+                            "f1": float(target_metrics.get("f1-score", target_metrics.get("f1_score", np.nan)))
                         })
 
                 cm_path = clf_dir / "confusion_matrix.npy"
@@ -261,16 +257,180 @@ def collect_fold_data(subject_dir: Path, subset_config: dict, classifiers: List[
                 if meta.get("val_accuracy") is not None:
                     result[clf]["val_accuracies"].append(float(meta["val_accuracy"]))
 
-    # Eliminar clasificadores sin datos
     result = {clf: data for clf, data in result.items() if data["metrics"] or data["confusion_matrices"]}
     return result if result else None
 
 
 ####################################################################################################################################
-# PLOTS INTRASUJETO
+# PLOTS OVR (NUEVOS)
+####################################################################################################################################
+def plot_ovr_intrasubject_metrics(subset_data_list, subset_configs, target_clf, output_path, subject_name):
+    """Boxplots agrupados: Recall y F1 para la clase 1 (Objetivo) en todas las clases OvR mostrando puntos por fold."""
+    labels = [cfg["display"].replace(" vs Resto", "").replace("Vocal ", "").replace("Cmd ", "") for cfg in subset_configs]
+    all_recalls = []
+    all_f1s = []
+    
+    for data in subset_data_list:
+        if data and target_clf in data and data[target_clf]["metrics"]:
+            all_recalls.append([m["recall"] for m in data[target_clf]["metrics"]])
+            all_f1s.append([m["f1"] for m in data[target_clf]["metrics"]])
+        else:
+            all_recalls.append([])
+            all_f1s.append([])
+
+    fig, ax = plt.subplots(figsize=(14, 6))
+    
+    # Posiciones base para los boxplots dobles
+    x = np.arange(len(labels)) * 2.0
+    pos_recall = x - 0.4
+    pos_f1 = x + 0.4
+    
+    # Matplotlib boxplot requiere que las listas no estén vacías
+    safe_recalls = [vals if len(vals)>0 else [np.nan] for vals in all_recalls]
+    safe_f1s = [vals if len(vals)>0 else [np.nan] for vals in all_f1s]
+    
+    ax.boxplot(safe_recalls, positions=pos_recall, widths=0.6, patch_artist=True,
+               showmeans=True, meanline=True, showfliers=False,
+               boxprops=dict(facecolor='#2ca02c', alpha=0.7),
+               medianprops=dict(color='black', linewidth=1.5))
+                      
+    ax.boxplot(safe_f1s, positions=pos_f1, widths=0.6, patch_artist=True,
+               showmeans=True, meanline=True, showfliers=False,
+               boxprops=dict(facecolor='#d62728', alpha=0.7),
+               medianprops=dict(color='black', linewidth=1.5))
+                       
+    _overlay_points(ax, pos_recall, all_recalls, color="#333", s=15, width=0.15)
+    _overlay_points(ax, pos_f1, all_f1s, color="#333", s=15, width=0.15)
+
+    ax.set_ylabel('Score (Clase 1)')
+    ax.set_title(f'Perfil de Decodificacion Fonetica y Motora - {subject_name} ({target_clf})', fontsize=14, fontweight='bold')
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, rotation=45, ha="right", fontsize=11)
+    
+    handles = [Patch(facecolor='#2ca02c', label='Recall (Clase 1)', alpha=0.7),
+               Patch(facecolor='#d62728', label='F1-Score (Clase 1)', alpha=0.7)]
+    ax.legend(handles=handles, loc='best')
+    
+    ax.set_ylim(0, 1)
+    ax.grid(axis='y', alpha=0.3)
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=200)
+    plt.close(fig)
+    print(f"  Saved: {output_path}")
+
+def plot_ovr_confusion_matrices(subset_data_list, subset_configs, target_clf, output_path, subject_name, is_global=False):
+    """Grilla de 11 matrices de confusión 2x2. Funciona para intrasujeto y global."""
+    fig, axes = plt.subplots(3, 4, figsize=(16, 12))
+    axes = axes.flatten()
+    
+    for idx, (ax, data, cfg) in enumerate(zip(axes, subset_data_list, subset_configs)):
+        if data and target_clf in data and data[target_clf]["confusion_matrices"]:
+            cm_stack = np.stack(data[target_clf]["confusion_matrices"], axis=0)
+            cm_mean = np.nanmean(cm_stack, axis=0)
+            cm_std = np.nanstd(cm_stack, axis=0)
+            
+            annot = np.array([[f"{cm_mean[i, j]:.1f}\n±{cm_std[i, j]:.1f}" for j in range(2)] for i in range(2)])
+            sns.heatmap(cm_mean, annot=annot, fmt="", cmap="cividis", ax=ax, vmin=0, vmax=100, cbar=False, annot_kws={"size": 11})
+            ax.set_title(cfg["display"], fontweight='bold')
+            ax.set_xticklabels(cfg["class_names"])
+            ax.set_yticklabels(cfg["class_names"], rotation=0)
+            if idx % 4 == 0:
+                ax.set_ylabel("True")
+            if idx >= 7:
+                ax.set_xlabel("Predicted")
+        else:
+            ax.axis('off')
+            
+    axes[-1].axis('off') # El subplot 12 queda vacío
+    title_prefix = "Global" if is_global else subject_name
+    fig.suptitle(f"Matrices de Confusion (OvR) - {title_prefix} ({target_clf})", fontsize=16, fontweight='bold')
+    fig.tight_layout(rect=[0, 0, 1, 0.97])
+    fig.savefig(output_path, dpi=200)
+    plt.close(fig)
+    print(f"  Saved: {output_path}")
+
+def plot_ovr_global_boxplots(all_subjects_data_raw, output_path, subset_configs, target_clf):
+    """Firmas Topológicas: Distribución del F1 de la clase 1 a través de los 15 sujetos."""
+    labels = [cfg["display"].replace(" vs Resto", "").replace("Vocal ", "").replace("Cmd ", "") for cfg in subset_configs]
+    all_f1s = []
+    
+    for cfg in subset_configs:
+        subset_f1s = []
+        for subj, sdata in all_subjects_data_raw.items():
+            data = sdata.get(cfg["name"])
+            if data and target_clf in data and data[target_clf]["metrics"]:
+                subj_f1 = np.nanmean([m["f1"] for m in data[target_clf]["metrics"]])
+                subset_f1s.append(subj_f1)
+        all_f1s.append(subset_f1s)
+
+    fig, ax = plt.subplots(figsize=(14, 6))
+    ax.boxplot(all_f1s, positions=np.arange(1, 12), patch_artist=True, showmeans=True, 
+               boxprops=dict(facecolor="#1f77b4", alpha=0.7), medianprops=dict(color='black', linewidth=2))
+    
+    _overlay_points(ax, np.arange(1, 12), all_f1s, alpha=0.5, color="#333", width=0.1)
+    
+    ax.set_ylim(0, 1)
+    ax.set_ylabel('F1-Score (Clase 1)', fontsize=12)
+    ax.set_title(f'Firmas Topologicas Universales (F1-Score por Clase) - {target_clf}', fontsize=14, fontweight='bold')
+    ax.grid(axis='y', alpha=0.3)
+    ax.set_xticks(np.arange(1, 12))
+    ax.set_xticklabels(labels, rotation=45, ha="right", fontsize=11)
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=200)
+    plt.close(fig)
+    print(f"  Saved: {output_path}")
+
+def plot_ovr_bci_illiteracy(all_subjects_data_raw, output_path, subset_configs, target_clf):
+    """Ranking BCI: Boxplots con la distribución total de F1 scores (todas las clases, todos los folds) por sujeto."""
+    subjects = sorted(list(all_subjects_data_raw.keys()))
+    all_subj_f1s = []
+    global_f1_pool = []
+    
+    for subj in subjects:
+        subj_f1s = []
+        sdata = all_subjects_data_raw[subj]
+        for cfg in subset_configs:
+            data = sdata.get(cfg["name"])
+            if data and target_clf in data and data[target_clf]["metrics"]:
+                # Agrupamos todos los F1-scores de todas las tareas OvR de ese sujeto
+                f1s = [m["f1"] for m in data[target_clf]["metrics"]]
+                subj_f1s.extend(f1s)
+                global_f1_pool.extend(f1s)
+        all_subj_f1s.append(subj_f1s)
+
+    fig, ax = plt.subplots(figsize=(14, 6))
+    
+    safe_f1s = [vals if len(vals)>0 else [np.nan] for vals in all_subj_f1s]
+    positions = np.arange(1, len(subjects) + 1)
+    
+    ax.boxplot(safe_f1s, positions=positions, patch_artist=True, showmeans=True, meanline=True, showfliers=False,
+               boxprops=dict(facecolor="#80b1d3", alpha=0.7),
+               medianprops=dict(color='black', linewidth=1.5))
+               
+    _overlay_points(ax, positions, all_subj_f1s, color="#333", s=15, width=0.15)
+    
+    global_mean = np.nanmean(global_f1_pool) if global_f1_pool else 0
+    ax.axhline(y=global_mean, color='red', linestyle='--', label=f'Media Poblacional ({global_mean:.3f})')
+    
+    ax.set_ylabel('F1-Score (Clase 1)', fontsize=12)
+    ax.set_title(f'Ranking de Aptitud BCI (Sujetos) - {target_clf}', fontsize=14, fontweight='bold')
+    
+    max_val = np.nanmax([np.nanmax(vals) if vals else 0 for vals in all_subj_f1s]) if all_subj_f1s else 1.0
+    ax.set_ylim(0, max(max_val * 1.1, 0.5))
+    
+    ax.set_xticks(positions)
+    ax.set_xticklabels(subjects, rotation=45, ha="right", fontsize=10)
+    ax.legend(loc='best')
+    ax.grid(axis='y', alpha=0.3)
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=200)
+    plt.close(fig)
+    print(f"  Saved: {output_path}")
+
+####################################################################################################################################
+# PLOTS CLÁSICOS (Anteriores)
 ####################################################################################################################################
 def plot_metrics_boxplots(subset_data_list, subset_configs, classifiers, output_path: Path, subject_name: str):
-    """Boxplots de P/R/F1 por clasificador (una fila por subset). P azul, R verde, F1 rojo."""
     n_subsets = len(subset_configs)
     fig, axes = plt.subplots(n_subsets, 1, figsize=(12, 5 * n_subsets))
     if n_subsets == 1:
@@ -301,7 +461,7 @@ def plot_metrics_boxplots(subset_data_list, subset_configs, classifiers, output_
                 positions.append(pos)
                 colors.append(METRIC_COLORS[metric_name])
                 pos += 1
-            pos += 2  # Separación entre clasificadores
+            pos += 2
 
         if not all_data:
             ax.text(0.5, 0.5, f"No metrics for {subset_name}", ha='center', va='center')
@@ -339,9 +499,7 @@ def plot_metrics_boxplots(subset_data_list, subset_configs, classifiers, output_
     plt.close(fig)
     print(f"  Saved: {output_path}")
 
-
 def plot_confusion_matrices(subset_data_list, subset_configs, classifiers, output_path: Path, subject_name: str):
-    """Matrices de confusión: filas = subsets, columnas = clasificadores."""
     n_subsets = len(subset_configs)
     n_clf = len(classifiers)
     fig, axes = plt.subplots(n_subsets, n_clf, figsize=(5.5 * n_clf, 5 * n_subsets))
@@ -388,60 +546,7 @@ def plot_confusion_matrices(subset_data_list, subset_configs, classifiers, outpu
     plt.close(fig)
     print(f"  Saved: {output_path}")
 
-
-def process_subject(subject_dir: Path, output_root: Path, subset_configs: List[dict], classifiers: List[str]) -> dict:
-    """Procesa un sujeto individual y genera todas las visualizaciones."""
-    subject_name = subject_dir.name
-    print(f"\n[Visualizer] Processing subject: {subject_name}")
-
-    subject_out = output_root / subject_name
-    subject_out.mkdir(parents=True, exist_ok=True)
-
-    subset_data_list = [collect_fold_data(subject_dir, cfg, classifiers) for cfg in subset_configs]
-
-    if all(data is None for data in subset_data_list):
-        print(f"  No data found for {subject_name}, skipping...")
-        return None
-
-    plot_metrics_boxplots(subset_data_list, subset_configs, classifiers,
-                          subject_out / "metrics_boxplots.png", subject_name)
-
-    plot_confusion_matrices(subset_data_list, subset_configs, classifiers,
-                            subject_out / "confusion_matrices.png", subject_name)
-
-    summary = {}
-    for cfg, data in zip(subset_configs, subset_data_list):
-        if data is None:
-            continue
-        summary[cfg["name"]] = {}
-        for clf in classifiers:
-            clf_data = data.get(clf)
-            if clf_data is None or not clf_data["metrics"]:
-                continue
-            metrics_arr = np.array([[m["precision"], m["recall"], m["f1"]] for m in clf_data["metrics"]])
-            summary[cfg["name"]][clf] = {
-                "n_folds": len(clf_data["metrics"]),
-                "precision_mean": float(np.nanmean(metrics_arr[:, 0])),
-                "precision_std": float(np.nanstd(metrics_arr[:, 0])),
-                "recall_mean": float(np.nanmean(metrics_arr[:, 1])),
-                "recall_std": float(np.nanstd(metrics_arr[:, 1])),
-                "f1_mean": float(np.nanmean(metrics_arr[:, 2])),
-                "f1_std": float(np.nanstd(metrics_arr[:, 2])),
-                "test_accuracy_mean": float(np.nanmean(clf_data["test_accuracies"])) if clf_data["test_accuracies"] else None,
-                "val_accuracy_mean": float(np.nanmean(clf_data["val_accuracies"])) if clf_data["val_accuracies"] else None,
-            }
-
-    save_json_safe(subject_out / "summary.json", summary)
-    print(f"  Saved: {subject_out / 'summary.json'}")
-
-    return summary
-
-
-####################################################################################################################################
-# PLOTS GLOBALES
-####################################################################################################################################
 def plot_global_metrics_boxplots(all_subjects_data: Dict, output_path: Path, subset_configs: List[dict], classifiers: List[str]):
-    """Boxplots globales de P/R/F1 por clasificador (todas las folds de todos los sujetos)."""
     n_subsets = len(subset_configs)
     fig, axes = plt.subplots(n_subsets, 1, figsize=(12, 5 * n_subsets))
     if n_subsets == 1:
@@ -513,9 +618,7 @@ def plot_global_metrics_boxplots(all_subjects_data: Dict, output_path: Path, sub
     plt.close(fig)
     print(f"  Saved: {output_path}")
 
-
 def plot_global_confusion_matrices(all_subjects_data_raw: Dict, output_path: Path, subset_configs: List[dict], classifiers: List[str]):
-    """Matrices de confusión globales: filas = subsets, columnas = clasificadores (promedio entre sujetos)."""
     n_subsets = len(subset_configs)
     n_clf = len(classifiers)
     fig, axes = plt.subplots(n_subsets, n_clf, figsize=(5.5 * n_clf, 5 * n_subsets))
@@ -571,29 +674,18 @@ def plot_global_confusion_matrices(all_subjects_data_raw: Dict, output_path: Pat
     plt.close(fig)
     print(f"  Saved: {output_path}")
 
-
 def plot_precision_by_subject(all_subjects_data_raw: Dict, output_path: Path, subset_configs: List[dict], classifiers: List[str]):
-    """
-    Precisión por sujeto (una fila por subset).
-    Eje X: cada sujeto con cajas por clasificador (coloreadas), luego bloque
-    'Promedio por clasificador' y 'Promedio absoluto'.
-    """
     n_subsets = len(subset_configs)
     fig, axes = plt.subplots(n_subsets, 1, figsize=(16, 5.5 * n_subsets))
     if n_subsets == 1:
         axes = [axes]
 
     subject_names = sorted(all_subjects_data_raw.keys())
-    n_subjects = len(subject_names)
-
+    
     for ax, cfg in zip(axes, subset_configs):
         subset_name = cfg["display"]
         chance_level = cfg["chance"]
-
-        # prec_by_subject[clf] = lista con el valor de precisión por fold de cada sujeto (todos juntos)
         prec_list_by_subject = {clf: [] for clf in classifiers}
-
-        # Para colorear las cajas: guardamos (pos, color) y los datos
         box_data = []
         box_positions = []
         box_colors = []
@@ -602,10 +694,7 @@ def plot_precision_by_subject(all_subjects_data_raw: Dict, output_path: Path, su
         gap_clf = 0.5
         gap_subject = 3.0
         pos = 1.0
-
-        # Coordenada central de cada sujeto
         subject_offsets = []
-        # Columnas dentro de cada sujeto
         clf_deltas = {clf: (i - (len(classifiers) - 1) / 2.0) * gap_clf for i, clf in enumerate(classifiers)}
 
         for subj_idx, subj_name in enumerate(subject_names):
@@ -625,7 +714,6 @@ def plot_precision_by_subject(all_subjects_data_raw: Dict, output_path: Path, su
             subject_offsets.append((pos, subj_name))
             pos += gap_subject
 
-        # Bloque "Promedio por clasificador"
         avg_clf_positions = []
         avg_block_start = pos + 1.0
         for i, clf in enumerate(classifiers):
@@ -637,7 +725,6 @@ def plot_precision_by_subject(all_subjects_data_raw: Dict, output_path: Path, su
                 box_colors.append(classifier_color(clf, len(classifiers)))
                 avg_clf_positions.append(clf_pos)
 
-        # Bloque "Promedio absoluto"
         all_absolute = []
         for clf in classifiers:
             all_absolute.extend(prec_list_by_subject[clf])
@@ -659,7 +746,6 @@ def plot_precision_by_subject(all_subjects_data_raw: Dict, output_path: Path, su
 
             _overlay_points(ax, box_positions, box_data, alpha=0.25, s=18, width=width * 0.25)
 
-        # Tick labels: sujetos + bloques
         subject_ticks = [subj_name for (p, subj_name) in subject_offsets]
         subject_tick_pos = [p for (p, subj_name) in subject_offsets]
         extra_ticks = []
@@ -679,13 +765,10 @@ def plot_precision_by_subject(all_subjects_data_raw: Dict, output_path: Path, su
         _draw_chance_hline(ax, chance_level, label=f'Chance level ({chance_level:.3f})')
         y_min, y_max = _compute_ylimits(all_absolute, [chance_level])
         ax.set_ylim(y_min, y_max)
-
         ax.set_ylabel("Precision", fontsize=11)
         ax.set_title(f"{subset_name} - Precision por sujeto y clasificador", fontsize=12, fontweight='bold')
         ax.grid(True, alpha=0.3, axis='y')
 
-        # Leyenda de clasificadores (patches manuales)
-        from matplotlib.patches import Patch
         handles = [Patch(facecolor=classifier_color(clf, len(classifiers)), label=clf) for clf in classifiers]
         handles.append(Patch(facecolor="#e0e0e0", label="Promedio absoluto"))
         ax.legend(handles=handles, loc='best', fontsize=8)
@@ -698,6 +781,64 @@ def plot_precision_by_subject(all_subjects_data_raw: Dict, output_path: Path, su
 
 
 ####################################################################################################################################
+# PROCESAMIENTO GENERAL
+####################################################################################################################################
+def process_subject(subject_dir: Path, output_root: Path, exp_config: dict, subset_configs: List[dict], classifiers: List[str]) -> dict:
+    subject_name = subject_dir.name
+    print(f"\n[Visualizer] Processing subject: {subject_name}")
+
+    subject_out = output_root / subject_name
+    subject_out.mkdir(parents=True, exist_ok=True)
+    
+    exp_mode = exp_config.get("mode")
+    is_ovr = (exp_mode == "one_vs_rest")
+
+    subset_data_list = [collect_fold_data(subject_dir, cfg, classifiers, is_ovr=is_ovr) for cfg in subset_configs]
+
+    if all(data is None for data in subset_data_list):
+        print(f"  No data found for {subject_name}, skipping...")
+        return None
+
+    if is_ovr:
+        # Gráficos exclusivos para OvR apuntando al TARGET_CLASSIFIER
+        plot_ovr_intrasubject_metrics(subset_data_list, subset_configs, OVR_TARGET_CLASSIFIER, 
+                                      subject_out / "metrics_boxplots.png", subject_name)
+        plot_ovr_confusion_matrices(subset_data_list, subset_configs, OVR_TARGET_CLASSIFIER, 
+                                    subject_out / "confusion_matrices.png", subject_name)
+    else:
+        # Gráficos Clásicos
+        plot_metrics_boxplots(subset_data_list, subset_configs, classifiers,
+                              subject_out / "metrics_boxplots.png", subject_name)
+        plot_confusion_matrices(subset_data_list, subset_configs, classifiers,
+                                subject_out / "confusion_matrices.png", subject_name)
+
+    summary = {}
+    for cfg, data in zip(subset_configs, subset_data_list):
+        if data is None:
+            continue
+        summary[cfg["name"]] = {}
+        for clf in classifiers:
+            clf_data = data.get(clf)
+            if clf_data is None or not clf_data["metrics"]:
+                continue
+            metrics_arr = np.array([[m["precision"], m["recall"], m["f1"]] for m in clf_data["metrics"]])
+            summary[cfg["name"]][clf] = {
+                "n_folds": len(clf_data["metrics"]),
+                "precision_mean": float(np.nanmean(metrics_arr[:, 0])),
+                "precision_std": float(np.nanstd(metrics_arr[:, 0])),
+                "recall_mean": float(np.nanmean(metrics_arr[:, 1])),
+                "recall_std": float(np.nanstd(metrics_arr[:, 1])),
+                "f1_mean": float(np.nanmean(metrics_arr[:, 2])),
+                "f1_std": float(np.nanstd(metrics_arr[:, 2])),
+                "test_accuracy_mean": float(np.nanmean(clf_data["test_accuracies"])) if clf_data["test_accuracies"] else None,
+                "val_accuracy_mean": float(np.nanmean(clf_data["val_accuracies"])) if clf_data["val_accuracies"] else None,
+            }
+
+    save_json_safe(subject_out / "summary.json", summary)
+    return summary
+
+
+####################################################################################################################################
 # MAIN
 ####################################################################################################################################
 if __name__ == "__main__":
@@ -706,9 +847,11 @@ if __name__ == "__main__":
 
     EXP_ROOT = find_latest_experiment(EXPERIMENTS_ROOT, EXPERIMENT_NAME_PREFIX)
     exp_config = detect_experiment_config(EXP_ROOT)
+    exp_mode = exp_config.get("mode")
     subset_configs = exp_config["subset_configs"]
+    
     print(f"[Visualizer] Using experiment root: {EXP_ROOT}")
-    print(f"[Visualizer] Mode detectado, subsets: {[c['name'] for c in subset_configs]}")
+    print(f"[Visualizer] Mode detectado: {exp_mode}")
 
     OUTPUT_ROOT = EXP_ROOT / OUTPUT_SUBDIR
     OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
@@ -716,7 +859,6 @@ if __name__ == "__main__":
     subject_dirs = sorted([p for p in EXP_ROOT.iterdir() if p.is_dir() and p.name.upper().startswith("S")])
     print(f"[Visualizer] Found {len(subject_dirs)} subject directories")
 
-    # Detectar clasificadores desde el primer sujeto disponible
     classifiers = []
     for subj_dir in subject_dirs:
         for cfg in subset_configs:
@@ -728,39 +870,61 @@ if __name__ == "__main__":
 
     if not classifiers:
         raise FileNotFoundError("No se pudieron detectar clasificadores en los folds del experimento")
+    
     sorted_n_classifiers = classifiers
     print(f"[Visualizer] Clasificadores detectados: {classifiers}")
 
     all_subjects_summaries = {}
     all_subjects_data_raw = {}
 
+    # 1. PROCESAMIENTO INTRASUJETO
     for subject_dir in subject_dirs:
         subject_name = subject_dir.name
-        summary = process_subject(subject_dir, OUTPUT_ROOT, subset_configs, classifiers)
+        summary = process_subject(subject_dir, OUTPUT_ROOT, exp_config, subset_configs, classifiers)
 
         if summary is not None:
             all_subjects_summaries[subject_name] = summary
             all_subjects_data_raw[subject_name] = {
-                cfg["name"]: collect_fold_data(subject_dir, cfg, classifiers)
+                cfg["name"]: collect_fold_data(subject_dir, cfg, classifiers, is_ovr=(exp_mode == "one_vs_rest"))
                 for cfg in subset_configs
             }
 
+    # 2. PROCESAMIENTO GLOBAL (INTERSUJETO)
     print("\n[Visualizer] Generating global visualizations...")
     global_out = OUTPUT_ROOT / "global"
     global_out.mkdir(parents=True, exist_ok=True)
 
-    plot_global_metrics_boxplots(all_subjects_data_raw,
-                                 global_out / "metrics_boxplots_global.png", subset_configs, classifiers)
+    if exp_mode == "one_vs_rest":
+        # Globales específicos para OvR
+        plot_ovr_global_boxplots(all_subjects_data_raw, global_out / "metrics_boxplots_global.png", subset_configs, OVR_TARGET_CLASSIFIER)
+        plot_ovr_bci_illiteracy(all_subjects_data_raw, global_out / "bci_illiteracy.png", subset_configs, OVR_TARGET_CLASSIFIER)
+        
+        # Para las CM globales iteramos combinando las de todos los sujetos
+        cm_global_data_list = []
+        for cfg in subset_configs:
+            cm_subset_combined = []
+            for subj, sdata in all_subjects_data_raw.items():
+                data = sdata.get(cfg["name"])
+                if data and OVR_TARGET_CLASSIFIER in data and data[OVR_TARGET_CLASSIFIER]["confusion_matrices"]:
+                    cm_subset_combined.extend(data[OVR_TARGET_CLASSIFIER]["confusion_matrices"])
+            
+            if cm_subset_combined:
+                cm_global_data_list.append({OVR_TARGET_CLASSIFIER: {"confusion_matrices": cm_subset_combined}})
+            else:
+                cm_global_data_list.append(None)
+                
+        plot_ovr_confusion_matrices(cm_global_data_list, subset_configs, OVR_TARGET_CLASSIFIER, 
+                                    global_out / "confusion_matrices_global.png", "Global", is_global=True)
+    else:
+        # Globales clásicos
+        plot_global_metrics_boxplots(all_subjects_data_raw, global_out / "metrics_boxplots_global.png", subset_configs, classifiers)
+        plot_global_confusion_matrices(all_subjects_data_raw, global_out / "confusion_matrices_global.png", subset_configs, classifiers)
+        plot_precision_by_subject(all_subjects_data_raw, global_out / "precision_by_subject.png", subset_configs, classifiers)
 
-    plot_global_confusion_matrices(all_subjects_data_raw,
-                                   global_out / "confusion_matrices_global.png", subset_configs, classifiers)
-
-    plot_precision_by_subject(all_subjects_data_raw,
-                              global_out / "precision_by_subject.png", subset_configs, classifiers)
-
+    # 3. EXPORTACIÓN DE RESUMEN
     global_summary = {
         "experiment_root": str(EXP_ROOT),
-        "mode": exp_config,
+        "mode": exp_mode,
         "classifiers": classifiers,
         "n_subjects": len(all_subjects_summaries),
         "subjects": list(all_subjects_summaries.keys()),
@@ -769,5 +933,4 @@ if __name__ == "__main__":
 
     save_json_safe(global_out / "global_summary.json", global_summary)
     print(f"  Saved: {global_out / 'global_summary.json'}")
-
     print(f"\n[Visualizer] Done! Results saved to: {OUTPUT_ROOT}")

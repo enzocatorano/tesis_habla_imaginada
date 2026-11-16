@@ -6,9 +6,9 @@ Riemanniano de matrices de covarianza (espacial o espectro-espacial) de cada tri
 
 MODO_MATRIZ selecciona qué dataset y qué bloques de la matriz se usan:
   "espacial"          -> data/clean_preprocessed_corr       (trials, 6, 6)          la matriz completa
-  "espectro_espacial" -> data/clean_preprocessed_corr_bandas (trials, 30, 30)        la matriz completa (5 bandas x 6 canales)
-  "espacial_banda"    -> data/clean_preprocessed_corr_bandas extrae 5 bloques 6x6 de la diagonal (uno por banda)
-  "frecuencial_canal" -> data/clean_preprocessed_corr_bandas extrae 6 bloques 5x5 de la diagonal (uno por canal)
+  "espectro_espacial" -> data/DIR_NO_SPACIAL (trials, 30, 30)        la matriz completa (5 bandas x 6 canales)
+  "espacial_banda"    -> data/DIR_NO_SPACIAL extrae 5 bloques 6x6 de la diagonal (uno por banda)
+  "frecuencial_canal" -> data/DIR_NO_SPACIAL extrae 6 bloques 5x5 de la diagonal (uno por canal)
 
 En todos los casos: y = (trials, 3) [modalidad, estímulo, artefacto]
 
@@ -49,14 +49,16 @@ from pyriemann.tangentspace import tangent_space
 # CONFIGURACIÓN (modificar aquí)
 # -----------------------------
 EXPERIMENTS_ROOT = Path(__file__).resolve().parents[1] / "experiments"
-EXPERIMENT_NAME = "ML_TS_Riemman_OvR_espectroespacial_"
+EXPERIMENT_NAME = "ML_TS_Riemman_OvR_espacial_banda_0.5_4.0"
 
 SUFIJO_DATOS = "_clean"
 NOMBRE_ARRAY_DATOS, NOMBRE_ARRAY_ETIQUETAS = "x", "y"
 
 # Modo de matriz (qué subconjunto de casillas se usa; ver docstring):
 #   "espacial", "espectro_espacial", "espacial_banda", "frecuencial_canal"
-MODO_MATRIZ = "espectro_espacial"
+MODO_MATRIZ = "espacial_banda"
+# solo si MODO_MATRIZ = "espacial" para que encuentre los datos
+DIR_NO_SPACIAL = "clean_0.5_4.0_corr_bandas"
 
 N_BANDAS = 5
 N_CANALES = 6
@@ -83,12 +85,17 @@ SUBJECT = None
 # CLASIFICADORES (habilitar/deshabilitar)
 # -----------------------------
 USE_LOGREG_L1 = True
-USE_SVM_LINEAL = True
-USE_KNN = True
-USE_RANDOM_FOREST = True
-USE_GRADIENT_BOOSTING = True
+USE_SVM_LINEAL = False
+USE_KNN = False
+USE_RANDOM_FOREST = False
+USE_GRADIENT_BOOSTING = False
 
-LOGREG_L1_KWARGS = dict(penalty="l1", solver="liblinear", C=1.0, max_iter=2000, class_weight="balanced")
+LOGREG_L1_KWARGS_BASE = dict(penalty="l1", C=1.0, max_iter=2000, class_weight="balanced")
+
+if EXPERIMENT_MODE == "separado":
+    LOGREG_L1_KWARGS = dict(LOGREG_L1_KWARGS_BASE, solver="saga", multi_class="multinomial")
+else:
+    LOGREG_L1_KWARGS = dict(LOGREG_L1_KWARGS_BASE, solver="liblinear")
 SVM_LINEAL_KWARGS = dict(C=1.0, class_weight="balanced", max_iter=10000, dual="auto")
 KNN_KWARGS = dict(n_neighbors=5, weights="distance", metric="minkowski")
 RANDOM_FOREST_KWARGS = dict(n_estimators=100, max_depth=5, min_samples_leaf=2, random_state=0, class_weight="balanced", n_jobs=-1)
@@ -116,7 +123,7 @@ def data_dir_for_mode(modo: str) -> Path:
     if modo == "espacial":
         return base / "clean_preprocessed_corr"
     if modo in ("espectro_espacial", "espacial_banda", "frecuencial_canal"):
-        return base / "clean_preprocessed_corr_bandas"
+        return base / DIR_NO_SPACIAL
     raise ValueError(f"MODO_MATRIZ desconocido: {modo}. Válidos: espacial, espectro_espacial, espacial_banda, frecuencial_canal")
 
 def bloques_diagonal(modo: str, X_all: np.ndarray):

@@ -1,26 +1,11 @@
 # src/recopilar_resultados_riemman.py
 """
 Script de visualización y resumen de resultados de experimentos ML sobre el
-espacio tangente Riemanniano (ML_TS_Riemman_experiment.py).
+espacio tangente Riemanniano.
 
-Genera dos tipos de análisis:
-1. MODOS CLÁSICOS ("binario", "separado", "unificado")
-   - Boxplots de P/R/F1 macro por clasificador.
-   - Matrices de confusión multiclase por clasificador.
-   - Precisión inter-sujeto.
-
-2. MODO "one_vs_rest" (OvR)
-   - Extrae métricas exclusivamente de la Clase 1 (Objetivo).
-   - Intrasujeto: Perfil de decodificación (Boxplots dobles agrupados) y Grilla CM 2x2.
-   - Intersujeto: Firmas Topológicas, Ranking BCI Illiteracy (Boxplots poblacionales), y Grilla CM global.
-   - Analiza exclusivamente el clasificador definido en OVR_TARGET_CLASSIFIER.
-
-Estructura de salida:
-  experiments/<EXPERIMENT>/visualization_results/
-    ├── <subject>/
-    │   └── *.png
-    └── global/
-        └── *.png
+ADAPTADO PARA SOPORTAR:
+- Estructura clásica (múltiples clasificadores en subdirectorios, experiment_config.json).
+- Estructura nueva (augmentación/ventaneo, clasificador único en la raíz del fold, config.json).
 """
 
 from pathlib import Path
@@ -35,12 +20,9 @@ from matplotlib.patches import Patch
 # CONFIG
 ####################################################################################################################################
 EXPERIMENTS_ROOT = Path(__file__).resolve().parents[1] / "experiments"
-EXPERIMENT_NAME_PREFIX = "ML_TS_Riemman_OvR_espectroespacial_20260921-215456_CatoranoBrothers"
+# Prefijo genérico para atrapar tanto los experimentos viejos como los nuevos
+EXPERIMENT_NAME_PREFIX = "ML_TS_Riemman_OvR_FTS_1TWS0.5_0.5_4.0_20261003-092849_CatoranoBrothers"
 OUTPUT_SUBDIR = "visualization_results"
-
-# --- CONFIGURACIÓN ESPECÍFICA PARA MODO OVR ---
-OVR_TARGET_CLASSIFIER = "reg_log_L1"  # Único clasificador a analizar en modo one_vs_rest
-# ----------------------------------------------
 
 METRICS_NAMES = ["Precision", "Recall", "F1-Score"]
 METRIC_COLORS = {"Precision": "#1f77b4", "Recall": "#2ca02c", "F1-Score": "#d62728"}
@@ -94,16 +76,23 @@ def find_latest_experiment(root: Path, prefix: str) -> Path:
 
 
 def detect_experiment_config(exp_root: Path) -> dict:
-    """Detecta el modo del experimento. Si es one_vs_rest, genera la config dinámicamente."""
-    config_path = exp_root / "experiment_config.json"
-    if not config_path.exists():
-        print("[Visualizer] No experiment_config.json found. Asumiendo modo binario.")
+    """Detecta el modo del experimento leyendo experiment_config.json (viejo) o config.json (nuevo)."""
+    config = None
+    config_viejo = exp_root / "experiment_config.json"
+    config_nuevo = exp_root / "config.json"
+
+    if config_viejo.exists():
+        with open(config_viejo, encoding="utf8") as fh:
+            config = json.load(fh)
+    elif config_nuevo.exists():
+        with open(config_nuevo, encoding="utf8") as fh:
+            config = json.load(fh)
+    
+    if config is None:
+        print("[Visualizer] No config found. Asumiendo modo binario.")
         cfg = MODE_CONFIG["binario"].copy()
         cfg["mode"] = "binario"
         return cfg
-
-    with open(config_path, encoding="utf8") as fh:
-        config = json.load(fh)
 
     mode = config.get("mode", "binario")
     
@@ -147,12 +136,20 @@ def save_json_safe(path: Path, obj):
 
 
 def discover_classifiers(subset_dir: Path) -> List[str]:
+    """Descubre los clasificadores evaluando si están en subcarpetas (clásico) o en la raíz del fold (nuevo)."""
     seed_dirs = sorted([p for p in subset_dir.iterdir() if p.is_dir() and p.name.startswith("seed_")])
     anchors = seed_dirs or [subset_dir]
     for anchor in anchors:
         fold_dirs = sorted([p for p in anchor.iterdir() if p.is_dir() and p.name.startswith("fold_")])
         if fold_dirs:
-            return sorted([p.name for p in fold_dirs[0].iterdir() if p.is_dir()])
+            fold_dir = fold_dirs[0]
+            # Si tiene subcarpetas, son los clasificadores viejos
+            subdirs = sorted([p.name for p in fold_dir.iterdir() if p.is_dir()])
+            if subdirs:
+                return subdirs
+            # Si no hay subcarpetas pero hay un metadata.json, es el script nuevo
+            elif (fold_dir / "metadata.json").exists():
+                return ["RegLog L1_Augmented"]
     return []
 
 
@@ -218,7 +215,11 @@ def collect_fold_data(subject_dir: Path, subset_config: dict, classifiers: List[
         fold_dirs = sorted([p for p in seed_dir.iterdir() if p.is_dir() and p.name.startswith("fold_")])
         for fold_dir in fold_dirs:
             for clf in classifiers:
+                # Soporte para ambas arquitecturas
                 clf_dir = fold_dir / clf
+                if not clf_dir.exists() and (fold_dir / "metadata.json").exists():
+                    clf_dir = fold_dir # Formato nuevo (augmentado)
+
                 if not clf_dir.exists():
                     continue
 
@@ -262,10 +263,9 @@ def collect_fold_data(subject_dir: Path, subset_config: dict, classifiers: List[
 
 
 ####################################################################################################################################
-# PLOTS OVR (NUEVOS)
+# PLOTS OVR 
 ####################################################################################################################################
 def plot_ovr_intrasubject_metrics(subset_data_list, subset_configs, target_clf, output_path, subject_name):
-    """Boxplots agrupados: Recall y F1 para la clase 1 (Objetivo) en todas las clases OvR mostrando puntos por fold."""
     labels = [cfg["display"].replace(" vs Resto", "").replace("Vocal ", "").replace("Cmd ", "") for cfg in subset_configs]
     all_recalls = []
     all_f1s = []
@@ -280,12 +280,10 @@ def plot_ovr_intrasubject_metrics(subset_data_list, subset_configs, target_clf, 
 
     fig, ax = plt.subplots(figsize=(14, 6))
     
-    # Posiciones base para los boxplots dobles
     x = np.arange(len(labels)) * 2.0
     pos_recall = x - 0.4
     pos_f1 = x + 0.4
     
-    # Matplotlib boxplot requiere que las listas no estén vacías
     safe_recalls = [vals if len(vals)>0 else [np.nan] for vals in all_recalls]
     safe_f1s = [vals if len(vals)>0 else [np.nan] for vals in all_f1s]
     
@@ -319,7 +317,6 @@ def plot_ovr_intrasubject_metrics(subset_data_list, subset_configs, target_clf, 
     print(f"  Saved: {output_path}")
 
 def plot_ovr_confusion_matrices(subset_data_list, subset_configs, target_clf, output_path, subject_name, is_global=False):
-    """Grilla de 11 matrices de confusión 2x2. Funciona para intrasujeto y global."""
     fig, axes = plt.subplots(3, 4, figsize=(16, 12))
     axes = axes.flatten()
     
@@ -341,7 +338,7 @@ def plot_ovr_confusion_matrices(subset_data_list, subset_configs, target_clf, ou
         else:
             ax.axis('off')
             
-    axes[-1].axis('off') # El subplot 12 queda vacío
+    axes[-1].axis('off') 
     title_prefix = "Global" if is_global else subject_name
     fig.suptitle(f"Matrices de Confusion (OvR) - {title_prefix} ({target_clf})", fontsize=16, fontweight='bold')
     fig.tight_layout(rect=[0, 0, 1, 0.97])
@@ -350,7 +347,6 @@ def plot_ovr_confusion_matrices(subset_data_list, subset_configs, target_clf, ou
     print(f"  Saved: {output_path}")
 
 def plot_ovr_global_boxplots(all_subjects_data_raw, output_path, subset_configs, target_clf):
-    """Firmas Topológicas: Distribución del F1 de la clase 1 a través de los 15 sujetos."""
     labels = [cfg["display"].replace(" vs Resto", "").replace("Vocal ", "").replace("Cmd ", "") for cfg in subset_configs]
     all_f1s = []
     
@@ -381,7 +377,6 @@ def plot_ovr_global_boxplots(all_subjects_data_raw, output_path, subset_configs,
     print(f"  Saved: {output_path}")
 
 def plot_ovr_bci_illiteracy(all_subjects_data_raw, output_path, subset_configs, target_clf):
-    """Ranking BCI: Boxplots con la distribución total de F1 scores (todas las clases, todos los folds) por sujeto."""
     subjects = sorted(list(all_subjects_data_raw.keys()))
     all_subj_f1s = []
     global_f1_pool = []
@@ -392,7 +387,6 @@ def plot_ovr_bci_illiteracy(all_subjects_data_raw, output_path, subset_configs, 
         for cfg in subset_configs:
             data = sdata.get(cfg["name"])
             if data and target_clf in data and data[target_clf]["metrics"]:
-                # Agrupamos todos los F1-scores de todas las tareas OvR de ese sujeto
                 f1s = [m["f1"] for m in data[target_clf]["metrics"]]
                 subj_f1s.extend(f1s)
                 global_f1_pool.extend(f1s)
@@ -428,7 +422,7 @@ def plot_ovr_bci_illiteracy(all_subjects_data_raw, output_path, subset_configs, 
     print(f"  Saved: {output_path}")
 
 ####################################################################################################################################
-# PLOTS CLÁSICOS (Anteriores)
+# PLOTS CLÁSICOS (Sin cambios sustanciales, solo llamadas)
 ####################################################################################################################################
 def plot_metrics_boxplots(subset_data_list, subset_configs, classifiers, output_path: Path, subject_name: str):
     n_subsets = len(subset_configs)
@@ -783,7 +777,7 @@ def plot_precision_by_subject(all_subjects_data_raw: Dict, output_path: Path, su
 ####################################################################################################################################
 # PROCESAMIENTO GENERAL
 ####################################################################################################################################
-def process_subject(subject_dir: Path, output_root: Path, exp_config: dict, subset_configs: List[dict], classifiers: List[str]) -> dict:
+def process_subject(subject_dir: Path, output_root: Path, exp_config: dict, subset_configs: List[dict], classifiers: List[str], target_clf: str) -> dict:
     subject_name = subject_dir.name
     print(f"\n[Visualizer] Processing subject: {subject_name}")
 
@@ -800,13 +794,11 @@ def process_subject(subject_dir: Path, output_root: Path, exp_config: dict, subs
         return None
 
     if is_ovr:
-        # Gráficos exclusivos para OvR apuntando al TARGET_CLASSIFIER
-        plot_ovr_intrasubject_metrics(subset_data_list, subset_configs, OVR_TARGET_CLASSIFIER, 
+        plot_ovr_intrasubject_metrics(subset_data_list, subset_configs, target_clf, 
                                       subject_out / "metrics_boxplots.png", subject_name)
-        plot_ovr_confusion_matrices(subset_data_list, subset_configs, OVR_TARGET_CLASSIFIER, 
+        plot_ovr_confusion_matrices(subset_data_list, subset_configs, target_clf, 
                                     subject_out / "confusion_matrices.png", subject_name)
     else:
-        # Gráficos Clásicos
         plot_metrics_boxplots(subset_data_list, subset_configs, classifiers,
                               subject_out / "metrics_boxplots.png", subject_name)
         plot_confusion_matrices(subset_data_list, subset_configs, classifiers,
@@ -872,7 +864,13 @@ if __name__ == "__main__":
         raise FileNotFoundError("No se pudieron detectar clasificadores en los folds del experimento")
     
     sorted_n_classifiers = classifiers
+    
+    # Soporte dinámico para el Target Classifier en modo OvR
+    OVR_TARGET_CLASSIFIER = classifiers[0]
+    
     print(f"[Visualizer] Clasificadores detectados: {classifiers}")
+    if exp_mode == "one_vs_rest":
+        print(f"[Visualizer] OVR Target Classifier fijado en: {OVR_TARGET_CLASSIFIER}")
 
     all_subjects_summaries = {}
     all_subjects_data_raw = {}
@@ -880,7 +878,7 @@ if __name__ == "__main__":
     # 1. PROCESAMIENTO INTRASUJETO
     for subject_dir in subject_dirs:
         subject_name = subject_dir.name
-        summary = process_subject(subject_dir, OUTPUT_ROOT, exp_config, subset_configs, classifiers)
+        summary = process_subject(subject_dir, OUTPUT_ROOT, exp_config, subset_configs, classifiers, OVR_TARGET_CLASSIFIER)
 
         if summary is not None:
             all_subjects_summaries[subject_name] = summary
@@ -895,11 +893,9 @@ if __name__ == "__main__":
     global_out.mkdir(parents=True, exist_ok=True)
 
     if exp_mode == "one_vs_rest":
-        # Globales específicos para OvR
         plot_ovr_global_boxplots(all_subjects_data_raw, global_out / "metrics_boxplots_global.png", subset_configs, OVR_TARGET_CLASSIFIER)
         plot_ovr_bci_illiteracy(all_subjects_data_raw, global_out / "bci_illiteracy.png", subset_configs, OVR_TARGET_CLASSIFIER)
         
-        # Para las CM globales iteramos combinando las de todos los sujetos
         cm_global_data_list = []
         for cfg in subset_configs:
             cm_subset_combined = []
@@ -916,7 +912,6 @@ if __name__ == "__main__":
         plot_ovr_confusion_matrices(cm_global_data_list, subset_configs, OVR_TARGET_CLASSIFIER, 
                                     global_out / "confusion_matrices_global.png", "Global", is_global=True)
     else:
-        # Globales clásicos
         plot_global_metrics_boxplots(all_subjects_data_raw, global_out / "metrics_boxplots_global.png", subset_configs, classifiers)
         plot_global_confusion_matrices(all_subjects_data_raw, global_out / "confusion_matrices_global.png", subset_configs, classifiers)
         plot_precision_by_subject(all_subjects_data_raw, global_out / "precision_by_subject.png", subset_configs, classifiers)

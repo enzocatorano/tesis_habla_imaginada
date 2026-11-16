@@ -42,9 +42,9 @@ from models import EEGNet, ShallowConvNet, DeepConvNet, iSpeechCNN
 # -----------------------------
 # CONFIGURACIÓN (modificar aquí)
 # -----------------------------
-DATA_DIR = Path(__file__).resolve().parents[1] / "data" / "clean_preprocessed"
+DATA_DIR = Path(__file__).resolve().parents[1] / "data" / "preprocesamiento_segun_Cooney_interactivo"
 EXPERIMENTS_ROOT = Path(__file__).resolve().parents[1] / "experiments"
-EXPERIMENT_NAME = "128_vowelsvscommands_ShallowCN_clean"
+EXPERIMENT_NAME = "DeepCN_NoAug_128Hz_likeCooney"
 
 # Parseo de argumentos CLI
 parser = argparse.ArgumentParser(description='EEG Experiment Runner')
@@ -61,8 +61,8 @@ args = parser.parse_args()
 if args.experiment_name:
     EXPERIMENT_NAME = args.experiment_name
 
-SUFIJO_DATOS = '_clean'
-NOMBRE_ARRAY_DATOS, NOMBRE_ARRAY_ETIQUETAS = "x", "y"
+SUFIJO_DATOS = '_EEG'
+NOMBRE_ARRAY_DATOS, NOMBRE_ARRAY_ETIQUETAS = "data", "labels"
 N_CHANNELS = 6
 FS = 128  # Frecuencia de muestreo de los datos (Hz)
 
@@ -76,8 +76,8 @@ FS = 128  # Frecuencia de muestreo de los datos (Hz)
 TRIAL_SEGMENT = tuple(args.trial_segment) if args.trial_segment else (None, None)
 
 # TARGET SELECTION (0: Modalidad, 1: Estímulo, 2: Artefacto, 3: Vocal vs Comando)
-TARGET_IDX = 3
-UNIFIED_STIM = True  # Solo aplica si TARGET_IDX == 1: True = 11 clases de estímulo (sin split vocales/comandos)
+TARGET_IDX = 1
+UNIFIED_STIM = False  # Solo aplica si TARGET_IDX == 1: True = 11 clases de estímulo (sin split vocales/comandos)
 
 # experiment control
 MASTER_SEED = 17    # setea a None si no querés seed maestro
@@ -88,12 +88,12 @@ K_FOLDS = 5
 VAL_FRAC = 0.2
 
 # training hyperparams
-BATCH_SIZE = 16
-EPOCHS = 100
-LR = 1e-3
-PATIENCE = 20
-DROPOUT = 0.2
-HIDDEN_UNITS = None
+BATCH_SIZE = 32
+EPOCHS = 200
+LR = 1e-2
+PATIENCE = 30
+DROPOUT = 0.5
+HIDDEN_UNITS = 20
 
 SUBJECT = None
 
@@ -108,7 +108,7 @@ USE_CLASS_WEIGHT = True  # True = enable balanced class weights in CrossEntropyL
 # -----------------------------
 # MODEL selection block
 # -----------------------------
-MODEL_NAME = "ShallowConvNet"
+MODEL_NAME = "DeepConvNet"
 
 if MODEL_NAME == "EEGNet":
     MODEL_CLASS = EEGNet

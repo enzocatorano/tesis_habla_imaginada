@@ -1913,7 +1913,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 # Open the MATLAB v7.3 file using h5py
-filepath = "data/carlos_sarmiento_raw/ST2/s1A2.mat"
+filepath = "data/carlos_sarmiento_raw/ST2/s2A2.mat"
 data = h5py.File(filepath, 'r')
 var_name = list(data.keys())[0]
 if var_name in data:

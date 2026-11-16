@@ -27,12 +27,18 @@ import pywt
 from pathlib import Path
 
 INPUT_DIR = Path(__file__).resolve().parent.parent / "data" / "clean_preprocessed"
-OUTPUT_DIR = Path(__file__).resolve().parent.parent / "data" / "clean_preprocessed_corr_bandas"
+OUTPUT_DIR = Path(__file__).resolve().parent.parent / "data" / "clean_0.5_4.0_corr_bandas"
 
 N_CHANNELS = 6
 SUBJ_IDS = [f"S{i:02d}" for i in range(1, 16)]
 
 WAVELET = "db4"
+FS = 128
+
+# Intervalo temporal opcional para recortar cada trial.
+# None = usar todo el trial (compatibilidad total).
+# Tupla (start_sec, end_sec): recorte en segundos, ej. (0, 0.5) -> primeros 500 ms.
+TEMPORAL_WINDOW = (0.5, 4.0)
 BANDS = ["delta", "theta", "alpha", "beta", "gamma"]
 CHANNEL_NAMES = ["F3", "F4", "C3", "C4", "P3", "P4"]
 
@@ -125,6 +131,14 @@ def process_subject(subj_id: str) -> dict:
     X = data["x"]  # (trials, n_channels, n_timepoints)
     Y = data["y"]  # (trials, 3)
 
+    # Aplicar recorte temporal si está definido
+    if TEMPORAL_WINDOW is not None:
+        start_sample = int(TEMPORAL_WINDOW[0] * FS)
+        end_sample = int(TEMPORAL_WINDOW[1] * FS)
+        start_sample = max(0, min(start_sample, 512))
+        end_sample = max(start_sample, min(end_sample, 512))
+        X = X[:, :, start_sample:end_sample]
+
     n_trials, n_ch, n_tp = X.shape
     if n_ch != N_CHANNELS:
         raise ValueError(f"[{subj_id}] Esperaba {N_CHANNELS} canales, se encontraron {n_ch}")
@@ -207,16 +221,16 @@ def process_all_subjects():
             "duration_seconds": 4,
             "samples_per_trial": 512,
             "fs": 128,
-            "note": "El trial completo se usa para la descomposicion y la covarianza (sin ventaneo)"
+            "note": f"Trial window: {TEMPORAL_WINDOW} segundos"
         },
         "covariance": {
             "type": "espectro-espacial (sin normalizar por desviacion estandar)",
-            "formula": "R = (Xc @ Xc.T) / (T - 1) sobre la senal (30, 256) descompuesta en bandas",
+            "formula": "R = (Xc @ Xc.T) / (T - 1) sobre la senal descompuesta en bandas",
             "centering": "se resta la media por fila (axis=1) antes del producto",
-            "estimated_over": "tiempo (256 muestras por banda del trial)",
+            "estimated_over": "tiempo (muestras por banda del trial descompuesto)",
             "per_trial_matrix": f"({n_bands * N_CHANNELS}x{n_bands * N_CHANNELS}) simetrica",
             "range": "(-inf, inf) - valores no acotados",
-            "note": "No se divide por la desviacion estandar a diferencia de la correlacion de Pearson"
+            "note": "No se divide por la desviacion estandar a diferencia de la correlacion de Pearson. T se refiere al numero de puntos de tiempo efectivos despues del recorte temporal."
         },
         "subjects": subjects_data,
         "subjects_processed": [f"{s['id']}_clean.npz" for s in subjects_data],
